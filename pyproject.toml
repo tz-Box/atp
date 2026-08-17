@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autotest"
+version = "0.1.0"
+description = "统一自动化测试服务框架（基于 tzcomm）"
+requires-python = ">=3.9"
+# 注意：tzcomm 为环境内已安装的本地组件（editable），不在此声明依赖。
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]

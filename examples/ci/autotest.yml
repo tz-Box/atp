@@ -1,0 +1,41 @@
+# Autotest 评测 CI/CD 模板（放到算法仓库 .github/workflows/autotest.yml）
+#
+# 行为：
+#   - push 到 autotest 分支：自动评测，报告发 GitHub Issue + 内网接口
+#   - push 到 mannultest 分支：自动评测，报告仅发 GitHub Issue
+#   - 也可手动触发（workflow_dispatch）
+#
+# 前提（详见 docs/使用指南.md §八 CI/CD）：
+#   1) 仓库根目录有 scenario.yaml（manifest：module/launch/scenario/image 等）；
+#   2) runner 是 self-hosted（内网，能访问 Autotest Service 与 tzcomm daemon）；
+#   3) 评测服务已部署（常驻），按 manifest.image 用 docker+bind 拉起算法；
+#   4) 内网接口地址填到仓库 Secret `INNER_WEBHOOK_URL`（autotest 分支发报告用，可留空跳过）。
+name: Autotest Evaluation
+
+on:
+  push:
+    branches: [autotest, mannultest]
+  workflow_dispatch: {}
+
+jobs:
+  evaluate:
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run evaluation
+        id: eval
+        # 提交评测（阻塞等结果）；失败也继续，让报告把错误写回 issue
+        run: |
+          python3 -m autotest.client run scenario.yaml --clock-rate 1.0 --json > report.json || true
+
+      - name: Send report
+        run: python3 ci/report.py report.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+          # 内网接口地址（autotest 分支才发送；不配置则跳过）
+          INNER_WEBHOOK_URL: ${{ secrets.INNER_WEBHOOK_URL }}

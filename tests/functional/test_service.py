@@ -1,0 +1,174 @@
+"""测试内容：常驻 Service（会话池）+ 算法 manifest（scenario.yaml）+ 环境变量注入 端到端。
+
+流程：
+    1) 算法仓库根目录有 scenario.yaml（静态声明 module/launch/scenario）；
+    2) Client 经 autotest/control 提交 manifest，立即拿到 job_id（异步）；
+    3) Client 经 autotest/job/status 轮询到完成；
+    4) Service 读 manifest → 加载场景 → 分配会话 → Launcher 拉起算法
+       （注入 AUTOTEST_SESSION/AUTOTEST_TOPICS）→ 会话握手 → 推流 → 打分 → 返回结果。
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import threading
+import time
+from pathlib import Path
+
+import yaml
+import tzcomm
+
+from autotest.client import main as cli_main
+from autotest.server import AutotestService
+from autotest.protocol import topics
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+_ALGO = str(Path(__file__).resolve().parent / "_echo_algo.py")
+_SCENARIO = str(_ROOT / "scenarios" / "synthetic_slam.yaml")
+
+_POLL_INTERVAL = 0.2
+
+
+def _write_manifest(tmp_path: Path, module: str = "slam") -> str:
+    manifest = {
+        "module": module,
+        "launch": f"{sys.executable} {_ALGO}",
+        "scenario": _SCENARIO,
+        "required_sensors": {"lidar": ["lidar"]},
+    }
+    manifest_path = tmp_path / "scenario.yaml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    return str(manifest_path)
+
+
+def _submit(manifest: str) -> dict:
+    """提交评测并轮询到完成，返回最终状态（含 job_id/results/error）。"""
+    node = tzcomm.Node("test-client")
+    try:
+        ctl = node.create_service_client(topics.control_service())
+        if not ctl.wait_for_server(timeout=5):
+            raise RuntimeError("control 服务不可用")
+        resp = ctl.call({"manifest": manifest, "clock_rate": 0}, timeout=30)  # 全速，避免测试按实时帧间隔等待
+        if "error" in resp:
+            return resp
+
+        status = node.create_service_client(topics.job_status_service())
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            state = status.call({"job_id": resp["job_id"]}, timeout=30)
+            if state.get("error"):
+                return state
+            if state["status"] == "done":
+                return state
+            time.sleep(_POLL_INTERVAL)
+        return {"error": "评测超时"}
+    finally:
+        node.close()
+
+
+def _start_service() -> AutotestService:
+    service = AutotestService(name="test-service")
+    threading.Thread(target=service.spin, daemon=True).start()
+    time.sleep(0.5)
+    return service
+
+
+def test_service_manifest_run(daemon, tmp_path):
+    manifest_path = _write_manifest(tmp_path)
+    service = _start_service()
+    try:
+        resp = _submit(manifest_path)
+    finally:
+        service.close()
+
+    assert not resp.get("error"), resp
+    results = resp["results"]
+    assert len(results) == 2, results
+    for r in results:
+        assert r["passed"] is True
+        assert r["metrics"]["ate_rmse"] < 1e-3
+        assert r["metrics"]["rpe_rmse"] < 1e-3
+
+    # 本机记录：artifacts/{job_id}/ 下有 report.json 与 session.log
+    artifact_dir = Path(os.environ["AUTOTEST_ARTIFACTS_DIR"]) / resp["job_id"]
+    assert (artifact_dir / "report.json").is_file()
+    assert (artifact_dir / "session.log").is_file()
+    report = json.loads((artifact_dir / "report.json").read_text(encoding="utf-8"))
+    assert len(report["results"]) == 2
+    assert report["error"] is None
+    assert "testcase" in (artifact_dir / "session.log").read_text(encoding="utf-8")
+
+
+def test_service_rejects_mismatched_module(daemon, tmp_path):
+    manifest_path = _write_manifest(tmp_path, module="nav")
+    service = _start_service()
+    try:
+        resp = _submit(manifest_path)
+    finally:
+        service.close()
+
+    assert "error" in resp
+    assert "不一致" in resp["error"]
+
+
+def test_service_rejects_missing_manifest(daemon, tmp_path):
+    service = _start_service()
+    try:
+        resp = _submit(str(tmp_path / "not_exist.yaml"))
+    finally:
+        service.close()
+
+    assert "error" in resp
+    assert "FileNotFoundError" in resp["error"]
+
+
+def test_service_parallel_jobs(daemon, tmp_path):
+    """会话池：两个 job 并发提交，互不阻塞，各自完成。"""
+    m1 = _write_manifest(tmp_path / "a", module="slam")
+    m2 = _write_manifest(tmp_path / "b", module="slam")
+    service = _start_service()
+
+    holder: dict = {}
+    threads = [
+        threading.Thread(target=lambda: holder.setdefault("j0", _submit(m1))),
+        threading.Thread(target=lambda: holder.setdefault("j1", _submit(m2))),
+    ]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=120)
+        # 两个 job 都能拿到不同的 job_id 且各自完成
+        assert "j0" in holder and "j1" in holder
+        for resp in (holder["j0"], holder["j1"]):
+            assert not resp.get("error"), resp
+            assert len(resp["results"]) == 2
+    finally:
+        service.close()
+
+
+def test_cli_matrix(daemon, tmp_path, capsys):
+    """交叉测试矩阵：多算法条目逐个评测并聚合结果（--json）。"""
+    m1 = _write_manifest(tmp_path / "a")
+    m2 = _write_manifest(tmp_path / "b")
+    matrix_path = tmp_path / "test_matrix.yaml"
+    matrix_path.write_text(
+        yaml.safe_dump({"algorithms": [{"manifest": m1}, {"manifest": m2}]}),
+        encoding="utf-8",
+    )
+
+    service = _start_service()
+    try:
+        rc = cli_main(["matrix", str(matrix_path), "--json"])
+    finally:
+        service.close()
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True
+    assert len(data["algorithms"]) == 2
+    for item in data["algorithms"]:
+        assert not item.get("error"), item
+        assert len(item["results"]) == 2

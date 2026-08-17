@@ -1,0 +1,11 @@
+# 交叉测试矩阵示例（算法仓库或评测侧放置）。
+#
+# 用法：python3 -m autotest.client matrix test_matrix.yaml [--json]
+# Service 逐个提交矩阵里的算法评测（会话池：多个评测可并发，互不阻塞）。
+algorithms:
+  - manifest: /path/to/算法A/scenario.yaml
+    # scenario: /path/to/其他场景.yaml      # 可选：覆盖 manifest 建议场景
+    # checker: pipe                          # 可选：覆盖场景 checker
+    # checker_config: { center_tolerance: 0.3 }
+  - manifest: /path/to/算法B/scenario.yaml
+clock_rate: 1.0        # 可选：推流倍率（1.0=实时），默认全速

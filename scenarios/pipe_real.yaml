@@ -1,0 +1,21 @@
+module: slam
+dataset:
+  type: rosbag_slam
+  config:
+    root: data/pipe-real
+    topic_map:
+      lidar:
+        front: /rslidar_points_front
+        rear: /rslidar_points_rear
+      imu:
+        imu: /IMU
+    gt_dir: data/pipe-real/gt
+    max_frames: 100                      # 冒烟测试：足够让 fastlio 出中轴线
+checker: pipe
+checker_config: { center_tolerance: 0.3, direction_tolerance_deg: 5.0 }
+sensor_config:
+  lidar:
+    front: /rslidar_points_front
+    rear: /rslidar_points_rear
+  imu:
+    imu: /IMU

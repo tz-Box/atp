@@ -1,0 +1,17 @@
+# ROS2 bridge（examples/ros2_pipe_bridge.py）的 manifest 示例。
+#
+# 用途：算法仓库根目录放一份同名配置，评测方 `python3 -m autotest.client run <本文件>`
+# 即触发评测——Service 读本文件 → 加载场景 → 拉起 bridge（注入 AUTOTEST_SESSION/TOPICS）。
+#
+# 注意：bridge 需要 ROS 环境（rclpy + fast_lio.msg），launch 里先 source；
+# 本示例按 TzTestTools/fast_lio_ws 部署路径填写，算法仓库按实际路径改。
+module: slam                      # 模块：slam / nav / manip，必须与场景 module 一致
+launch: >
+  bash -c "source /opt/ros/humble/setup.bash &&
+           source /home/user/TzTestTools/fast_lio_ws/install/setup.bash &&
+           python3 ros2_pipe_bridge.py"
+scenario: /home/user/TzTestService/scenarios/pipe_real.yaml   # 建议场景，评测方可 --scenario 覆盖
+# image: "registry.example/algo-fastlio:v1"   # 可选：docker+bind 方式（见 slam_algo.scenario.yaml 注释）
+required_sensors:                 # bridge 转发给 ROS 算法所需传感器（框架校验场景覆盖）
+  lidar: [front, rear]
+output_topic: /cylinder_extraction_independent/result   # 算法自有产物话题（记录用，非评测输入）

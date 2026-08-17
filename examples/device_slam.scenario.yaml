@@ -1,0 +1,25 @@
+# real-world device 层（TuringZero Patrol Box /device/source/*/data）接入示例。
+#
+# 用途：评测服务的 DeviceWorld 直接订阅设备强类型样本话题（tzcomm dict），
+# SlamDeviceConverter 转成 SlamData 帧；话题名可经 tzcomm remap 配置化。
+# 设备侧零改动：只发布自己的数据，不感知评测。
+#
+# 注意：
+# - 需要设备数据在跑（Patrol Box device 层发布 /device/source/*/data）；
+# - device 数据源是实时流（world.realtime），Loader 不做 pacing，实时推给算法；
+# - 多实例 lidar（front/rear）经 FrameAssembler 按 header.stamp 容差对齐后产帧。
+module: slam
+dataset:
+  type: device_slam
+  config:
+    topic_map:
+      lidar:
+        front: /device/source/lidar_front/data
+        rear: /device/source/lidar_rear/data
+      imu:
+        imu: /device/source/body_imu/data
+    tolerance: 0.05          # 同步容差（秒），可选，默认 0.05
+# checker: slam              # 实时源无 GT，省略 checker 时做数据流验证（只统计 records 数）
+sensor_config:
+  lidar: { front: /device/source/lidar_front/data, rear: /device/source/lidar_rear/data }
+  imu: { imu: /device/source/body_imu/data }

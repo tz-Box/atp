@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# 测试缓存与覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 评测产物（本地留痕，不入库）
+artifacts/
+
+# 真实数据（rosbag 大二进制；GT csv 如需入库可改为 data/**/*.db3）
+data/
+
+# IDE
+.idea/
+.vscode/
