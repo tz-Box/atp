@@ -21,3 +21,6 @@ artifacts/
 # IDE
 .idea/
 .vscode/
+
+## user add
+__temp__/
