@@ -1,0 +1,9 @@
+body: invp_sim                  # 纯仿真台架本体（body/invp_sim.yaml，无传感器）
+dataset:
+  type: ctrl.invp.sim
+  config:
+    testcases:
+      small_push: { theta0: 0.05 }
+      medium_push: { theta0: 0.10, theta_dot0: 0.2 }
+checker: ctrl.invp.upright
+checker_config: { settle_threshold: 0.02 }

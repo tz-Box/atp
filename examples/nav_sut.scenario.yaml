@@ -1,0 +1,5 @@
+launch: "python3 nav_sut.py"           # 启动命令（相对本文件目录执行）
+consumes: ["nav2d.NavObs"]             # 消费的 observation schema（与插件一致）
+scenario: ../plugins/nav2d/scenarios/sim_basic.yaml   # 建议场景（相对本文件目录解析）
+required_sensors: {}                   # 纯仿真任务：无传感器依赖
+hyperparams: {}                        # SimpleNav 控制增益内建，无需超参

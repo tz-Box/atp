@@ -1,0 +1,42 @@
+# Patrol Box 本体资产 v1
+#
+# 本体 = 机器人型号 + URDF + 标定 + 传感器布置 + 外参
+# 所有数据集(回放)必须声明 body_id + body_version,确保数据集与本体对齐
+body:
+  name: pbox
+  version: 1
+  urdf_path: body/pbox_v1.urdf
+  sensors:
+    lidar:
+      front:
+        topic: /rslidar_points_front
+        type: pointcloud2
+        extrinsics:
+          xyz: [0.30, 0.0, 0.25]   # 相对 base_link,单位米
+          rpy: [0.0, 0.0, 0.0]       # roll pitch yaw,弧度
+      rear:
+        topic: /rslidar_points_rear
+        type: pointcloud2
+        extrinsics:
+          xyz: [-0.30, 0.0, 0.25]
+          rpy: [0.0, 0.0, 3.14159]   # 朝后安装
+    imu:
+      imu:                         # 实例名与数据集 topic_map 约定一致（bags/device 均为 imu）
+        topic: /IMU
+        type: imu
+        extrinsics:
+          xyz: [0.0, 0.0, 0.10]
+          rpy: [0.0, 0.0, 0.0]
+    camera:
+      front:
+        topic: /camera/front/image_raw
+        type: image
+        extrinsics:
+          xyz: [0.28, 0.0, 0.20]
+          rpy: [0.0, 0.0, 0.0]
+  ground_clearance: 0.02  # 离地间隙(米),用于 URDF 简化
+  # 运动学参数(供 nav/closed-loop 用)
+  kinematics:
+    type: differential_drive
+    wheel_base: 0.42   # 轮距(米)
+    wheel_radius: 0.10 # 轮半径(米)

@@ -1,0 +1,9 @@
+body: manip_sim                 # 纯仿真台架本体（body/manip_sim.yaml，无传感器）
+dataset:
+  type: manip.force.sim
+  config:
+    testcases:
+      light_touch: { target_force: 3.0 }   # 轻触：低目标力
+      firm_press: { target_force: 8.0 }    # 压实：高目标力
+checker: manip.force.track
+checker_config: { settle_threshold: 0.5 }

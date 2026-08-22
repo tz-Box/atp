@@ -1,0 +1,17 @@
+body: nav2d_sim                 # 纯仿真台架本体（body/nav2d_sim.yaml，无传感器）
+dataset:
+  type: nav2d.sim
+  config:
+    testcases:
+      straight:                      # 正前方 goal，障碍偏出路线
+        start: [0.0, 0.0, 0.0]
+        goal: [5.0, 0.0]
+        obstacles: [[3.0, 1.5, 0.5]]
+        max_steps: 300
+      offset_goal:                   # goal 带横向偏移，需持续转向
+        start: [0.0, 0.0, 0.0]
+        goal: [5.0, 2.0]
+        obstacles: [[2.5, -1.5, 0.5]]
+        max_steps: 300
+checker: nav2d.default
+checker_config: { arrival_tolerance: 0.2, safety_margin: 0.3 }

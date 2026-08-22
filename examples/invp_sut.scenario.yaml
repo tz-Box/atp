@@ -1,0 +1,5 @@
+launch: "python3 invp_sut.py"          # 启动命令（相对本文件目录执行）
+consumes: ["ctrl.invp.InvpObs"]        # 消费的 observation schema（与插件一致）
+scenario: ../plugins/ctrl.invp/scenarios/sim_basic.yaml   # 建议场景（相对本文件目录解析）
+required_sensors: {}                   # 纯仿真任务：无传感器依赖
+hyperparams: {}                        # PD 增益有默认值；可覆盖 kp/kd/kx/kxd

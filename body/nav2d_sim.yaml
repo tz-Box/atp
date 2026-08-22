@@ -1,0 +1,5 @@
+body:
+  name: nav2d_sim
+  version: "1"
+  urdf_path: ""
+  sensors: {}        # 纯仿真台架：无机器人传感器，sensor_config 为空

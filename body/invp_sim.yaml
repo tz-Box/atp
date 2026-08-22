@@ -1,0 +1,5 @@
+body:
+  name: invp_sim
+  version: "1"
+  urdf_path: ""
+  sensors: {}        # 纯仿真控制台架：无机器人传感器，sensor_config 为空
