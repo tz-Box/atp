@@ -48,11 +48,9 @@ class AutotestService:
         self._jobs: dict[str, Job] = {}
         self._jobs_lock = threading.Lock()
 
-    # ---- Client → Service：提交评测（立即返回 job_id，异步执行） ----
-    def _on_control(self, request: dict) -> dict:
-        command = request.get("command")
-        if command:
-            return self._on_debug_command(command, request)
+    # ---- 公共业务面（tzcomm 服务与 HTTP 面共享同一 Jobs 池） ----
+    def submit(self, request: dict) -> dict:
+        """提交评测：立即返回 job_id，异步执行。"""
         try:
             manifest = load_algorithm_manifest(request["manifest"])
             scenario_path = request.get("scenario") or manifest.scenario
@@ -83,9 +81,8 @@ class AutotestService:
         threading.Thread(target=self._run_job, args=(job,), daemon=True).start()
         return {"job_id": job_id}
 
-    # ---- Client → Service：调试命令（暂停/单步/继续，M-B3） ----
-    def _on_debug_command(self, command: str, request: dict) -> dict:
-        job_id = request.get("job_id", "")
+    def command(self, job_id: str, command: str, n: int = 1) -> dict:
+        """调试命令（暂停/单步/继续，M-B3）。"""
         with self._jobs_lock:
             job = self._jobs.get(job_id)
         if job is None:
@@ -97,7 +94,6 @@ class AutotestService:
         elif command == "resume":
             job.control.resume()
         elif command == "step":
-            n = int(request.get("n", 1))
             if not job.control.step(n):
                 return {"error": "非暂停状态，step 无效（先 pause）"}
         else:
@@ -105,9 +101,8 @@ class AutotestService:
         return {"ok": True, "job_id": job_id, "run_state": job.control.state,
                 "frames": job.control.frames_sent}
 
-    # ---- Client → Service：轮询进度/结果 ----
-    def _on_job_status(self, request: dict) -> dict:
-        job_id = request.get("job_id", "")
+    def job_status(self, job_id: str) -> dict:
+        """轮询进度/结果。"""
         with self._jobs_lock:
             job = self._jobs.get(job_id)
         if job is None:
@@ -122,6 +117,21 @@ class AutotestService:
                 "results": list(job.results),
                 "comm_health": job.comm_health,
             }
+
+    @property
+    def job_count(self) -> int:
+        with self._jobs_lock:
+            return len(self._jobs)
+
+    # ---- tzcomm 面适配 ----
+    def _on_control(self, request: dict) -> dict:
+        command = request.get("command")
+        if command:
+            return self.command(request.get("job_id", ""), command, int(request.get("n", 1)))
+        return self.submit(request)
+
+    def _on_job_status(self, request: dict) -> dict:
+        return self.job_status(request.get("job_id", ""))
 
     def _run_job(self, job: Job) -> None:
         proc = None
