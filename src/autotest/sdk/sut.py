@@ -3,6 +3,12 @@
 进程模型：算法由评测服务启动，评测服务注入环境变量
 AUTOTEST_SESSION（会话号）与 AUTOTEST_TOPICS（JSON 话题表），
 算法据此建订阅/发布/服务，无需注册握手。
+
+数据面（v1.1 §4.2/§5.2）：
+- on_step 收到 observation 外层信封 dict（{timestamp, module, data}），
+  算法用 schema.decode_observation(obs["data"]) 解码为本插件的数据对象；
+- on_step 返回 messages.Result / messages.Action（module + data 信封），
+  SDK 据此发往 result / action topic。
 """
 from __future__ import annotations
 
@@ -14,7 +20,6 @@ import tzcomm
 
 from ..protocol import messages as msg
 from ..protocol import topics
-from ..protocol.schema import Action, Observation, Result
 
 
 class SutBase:
@@ -23,6 +28,9 @@ class SutBase:
     required_sensors: dict = {}  # {类型: [实例名...]}，算法声明所需传感器
 
     def __init__(self, name: str, session_id: Optional[str] = None) -> None:
+        if os.environ.get("TZCOMM_LOG_LEVEL"):
+            # opt-in：设置 TZCOMM_LOG_LEVEL 即开启 tzcomm 诊断日志（控制台 + ~/.tzcomm/app.log）
+            tzcomm.setup_logging()
         self._node = tzcomm.Node(name)
         if session_id is None:
             # 生产路径：环境变量由评测服务注入
@@ -55,8 +63,9 @@ class SutBase:
     def on_reset(self, testcase_meta: dict[str, Any]) -> None:
         pass
 
-    def on_step(self, observation: Observation) -> Optional[Result | Action]:
-        """开环回 Result（发 RESULT）；闭环回 Action（发 ACTION）。"""
+    def on_step(self, observation: dict) -> Optional[msg.Result | msg.Action]:
+        """observation: 外层信封 dict（{timestamp, module, data}）。
+        开环回 messages.Result（发 RESULT）；闭环回 messages.Action（发 ACTION）。"""
         return None
 
     def on_terminate(self, reason: str) -> dict[str, Any]:
@@ -72,7 +81,10 @@ class SutBase:
             return msg.reset_ack(self.session_id, True).to_dict()
         if message.type == msg.TERMINATE:
             reason = message.payload.get("reason", "")
-            return msg.final(self.session_id, self.on_terminate(reason)).to_dict()
+            stats = self.on_terminate(reason) or {}
+            # SDK 自动附 SUT 侧通信自统计（obs 接收丢包），Service 收齐入 comm_health
+            stats.setdefault("comm", self._node.network_stats())
+            return msg.final(self.session_id, stats).to_dict()
         raise ValueError(f"未知控制消息: {message.type!r}")
 
     def _on_observation(self, request: dict) -> None:
@@ -81,9 +93,9 @@ class SutBase:
         if done or observation is None:
             return
         reply = self.on_step(observation)
-        if isinstance(reply, Result):
+        if isinstance(reply, msg.Result):
             self._result_pub.publish(msg.result(self.session_id, reply).to_dict())
-        elif isinstance(reply, Action):
+        elif isinstance(reply, msg.Action):
             self._action_pub.publish(msg.action(self.session_id, reply).to_dict())
 
     def spin(self) -> None:

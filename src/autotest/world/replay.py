@@ -3,16 +3,20 @@ from __future__ import annotations
 
 from typing import Iterator, Optional, Protocol
 
-from ..protocol.schema import Observation
-from .base import GroundTruth, IWorld
+from .base import IWorld
 
 
 class Dataset(Protocol):
     testcases: list[str]
+    produces: list[str]  # 产出的观测 schema（命名空间键）
 
-    def frames(self, testcase_id: str) -> Iterator[Observation]: ...
+    def frames(self, testcase_id: str) -> Iterator[dict]:
+        """逐帧产出 observation 外层信封 dict（{timestamp, module, data}）。"""
+        ...
 
-    def ground_truth(self, testcase_id: str) -> GroundTruth: ...
+    def ground_truth(self, testcase_id: str) -> dict:
+        """返回 GT 信封 dict（{schema, v, data}）。"""
+        ...
 
 
 class DatasetWorld(IWorld):
@@ -21,18 +25,22 @@ class DatasetWorld(IWorld):
     def __init__(self, dataset: Dataset) -> None:
         self._dataset = dataset
         self._testcase_id: Optional[str] = None
-        self._frames: Optional[Iterator[Observation]] = None
+        self._frames: Optional[Iterator[dict]] = None
+
+    @property
+    def produces(self) -> list[str]:
+        return list(getattr(self._dataset, "produces", []))
 
     @property
     def testcases(self) -> list[str]:
         return list(self._dataset.testcases)
 
-    def reset(self, testcase_id: str) -> Observation:
+    def reset(self, testcase_id: str) -> dict:
         self._testcase_id = testcase_id
         self._frames = iter(self._dataset.frames(testcase_id))
         return next(self._frames)
 
-    def step(self, action=None) -> tuple[Optional[Observation], bool, dict]:
+    def step(self, action=None) -> tuple[Optional[dict], bool, dict]:
         if self._frames is None:
             raise RuntimeError("DatasetWorld.step() 前必须先 reset()")
         try:
@@ -40,7 +48,7 @@ class DatasetWorld(IWorld):
         except StopIteration:
             return None, True, {}
 
-    def get_ground_truth(self) -> GroundTruth:
+    def get_ground_truth(self) -> dict:
         if self._testcase_id is None:
             raise RuntimeError("DatasetWorld.get_ground_truth() 前必须先 reset()")
         return self._dataset.ground_truth(self._testcase_id)

@@ -19,6 +19,7 @@ import os
 import threading
 from dataclasses import dataclass
 
+import msgpack
 import numpy as np
 import tzcomm
 
@@ -33,7 +34,10 @@ RESULT = "result"
 TERMINATE = "terminate"
 FINAL = "final"
 
-MODULE = "slam"
+MODULE = "pipe.slam"  # 插件命名空间（v1.1 §3）
+# 本算法消费/产出的数据 schema（v1.1 §4.2 数据面信封）
+_OBS_SCHEMA = "pipe.slam.SlamObs"
+_RESULT_SCHEMA = "pipe.slam.CylinderResult"
 # 本算法声明的输入传感器需求（交给框架校验场景是否提供）
 _REQUIRED_SENSORS = {"lidar": ["front", "rear"]}
 # 本算法声明的输出话题（算法侧自有，不来自框架）
@@ -149,7 +153,12 @@ class Ros2PipeBridge:
 
     @staticmethod
     def _decode_observation(observation: dict) -> tuple[dict, dict]:
-        data = observation.get("data", {})
+        """observation 外层信封 {timestamp, module, data}；data 为数据面信封
+        {schema, v, enc, blob}（v1.1 §4.2），blob 是 msgpack 编码的 SlamData dict。"""
+        envelope = observation.get("data", {})
+        if envelope.get("schema") != _OBS_SCHEMA:
+            raise ValueError(f"未知 observation schema: {envelope.get('schema')!r}")
+        data = msgpack.unpackb(envelope["blob"], raw=False)
         sensors = data.get("sensors", {})
         lidars = {
             name: np.frombuffer(raw["data"], dtype=np.dtype(raw["dtype"])).reshape(raw["shape"])
@@ -159,19 +168,24 @@ class Ros2PipeBridge:
         return lidars, imus
 
     def _build_result(self, slot: _CylinderSlot) -> dict:
+        """RESULT 消息：payload.data 为数据面信封 {schema, v, enc, blob}（v1.1 §4.2）。"""
+        blob = msgpack.packb(
+            {
+                "timestamp": slot.timestamp,
+                "center": list(slot.center),
+                "direction": list(slot.direction),
+                "valid": True,
+                "straightness_residual": slot.straightness_residual,
+                "radius": 0.0,
+            },
+            use_bin_type=True,
+        )
         return {
             "type": RESULT,
             "session_id": self.session_id,
             "payload": {
                 "module": MODULE,
-                "data": {
-                    "timestamp": slot.timestamp,
-                    "center": list(slot.center),
-                    "direction": list(slot.direction),
-                    "valid": True,
-                    "straightness_residual": slot.straightness_residual,
-                    "radius": 0.0,
-                },
+                "data": {"schema": _RESULT_SCHEMA, "v": 1, "enc": "msgpack", "blob": blob},
             },
         }
 

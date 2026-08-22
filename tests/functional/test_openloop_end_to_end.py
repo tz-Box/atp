@@ -4,27 +4,36 @@
 import uuid
 
 from autotest.eval import Runner
-from autotest.protocol.schema import SLAM, Result, StampedPose
+from autotest.protocol import messages as msg
+from autotest.protocol.schema import StampedPose, decode_observation, encode_result
+from autotest.registry import load_plugin
 from autotest.sdk import SutBase
 from autotest.world import DatasetWorld
-from modules.slam import SlamChecker, SyntheticSlamDataset
+
+slam = load_plugin("pipe.slam")
 
 
 class _EchoSlam(SutBase):
-    module = "slam"
+    module = "pipe.slam"
 
     def on_step(self, observation):
-        slam = observation.data  # SlamData
-        if slam.odom is None:
+        data = decode_observation(observation["data"])  # SlamData
+        if data.odom is None:
             return None
-        return Result(SLAM, StampedPose(timestamp=observation.timestamp, pose=slam.odom))
+        return msg.Result(
+            "pipe.slam",
+            encode_result(
+                "pipe.slam.StampedPose",
+                StampedPose(timestamp=observation["timestamp"], pose=data.odom),
+            ),
+        )
 
 
 def test_openloop_end_to_end(daemon):
     session_id = f"func-{uuid.uuid4().hex[:8]}"
-    dataset = SyntheticSlamDataset(n_testcases=2, n_steps=20, seed=7)
+    dataset = slam.SyntheticSlamDataset(n_testcases=2, n_steps=20, seed=7)
     world = DatasetWorld(dataset)
-    checker = SlamChecker()
+    checker = slam.SlamChecker()
 
     runner = Runner(world, checker, session_id=session_id, name="func-service")
     sut = _EchoSlam("func-sut", session_id)

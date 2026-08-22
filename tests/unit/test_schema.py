@@ -1,22 +1,28 @@
-"""测试内容：三信封（Observation/Action/Result）序列化 roundtrip + data 注册分派。
-期望输出：字段保真、lidar 字节往返一致、未知模块 payload 原样保留。
+"""测试内容：data 信封编解码 roundtrip + observation 外层信封 + GT 信封 + 未知 schema 拒收。
+期望输出：字段保真、lidar 字节往返一致、未注册 schema 抛 SchemaError。
 """
 import numpy as np
+import pytest
 
-import modules.nav  # noqa: F401  触发 data 注册
-import modules.slam  # noqa: F401  触发 data 注册
 from autotest.protocol.schema import (
-    NAV,
-    SLAM,
-    Action,
     Imu,
-    Observation,
     Pose,
-    Result,
+    SchemaError,
     StampedPose,
+    decode_action,
+    decode_ground_truth,
+    decode_observation,
+    decode_result,
+    encode_action,
+    encode_ground_truth,
+    encode_observation,
+    encode_result,
+    make_observation,
 )
-from autotest.protocol.data.nav import NavAction, NavData
-from autotest.protocol.data.slam import SlamData
+from autotest.registry import load_plugin
+
+slam = load_plugin("pipe.slam")  # 触发 pipe.slam schema 注册
+nav2d = load_plugin("nav2d")  # 触发 nav2d schema 注册
 
 
 def test_pose_and_stamped_roundtrip():
@@ -28,48 +34,73 @@ def test_pose_and_stamped_roundtrip():
 
 def test_slam_observation_roundtrip():
     lidar = np.random.default_rng(0).normal(size=(100, 3)).astype(np.float32)
-    observation = Observation(
-        0.5,
-        SLAM,
-        SlamData(
+    envelope = encode_observation(
+        "pipe.slam.SlamObs",
+        slam.SlamData(
             sensors={"lidar": {"front": lidar}, "imu": {"imu": Imu([0, 0, 0], [0, 0, 0])}},
             odom=Pose(1, 2, 3, 0, 0, 0, 1),
         ),
     )
-    parsed = Observation.from_dict(observation.to_dict())
-    assert parsed.module == SLAM
-    assert isinstance(parsed.data, SlamData)
-    assert np.array_equal(parsed.data.sensors["lidar"]["front"], lidar)
-    assert parsed.data.odom.y == 2.0
+    assert envelope["schema"] == "pipe.slam.SlamObs"
+    assert envelope["v"] == 1
+    assert envelope["enc"] == "msgpack"
+    parsed = decode_observation(envelope)
+    assert isinstance(parsed, slam.SlamData)
+    assert np.array_equal(parsed.sensors["lidar"]["front"], lidar)
+    assert parsed.odom.y == 2.0
+
+
+def test_observation_outer_envelope():
+    data = encode_observation("pipe.slam.SlamObs", slam.SlamData())
+    obs = make_observation("pipe.slam", 0.5, data)
+    assert set(obs) == {"timestamp", "module", "data"}
+    assert obs["timestamp"] == 0.5
+    assert obs["module"] == "pipe.slam"
+    assert obs["data"] is data
 
 
 def test_nav_observation_roundtrip():
-    observation = Observation(
-        0.3,
-        NAV,
-        NavData(robot_pose=Pose(0, 0, 0, 0, 0, 0, 1), goal=Pose(5, 0, 0, 0, 0, 0, 1), obstacles=[(3.0, 1.5, 0.5)]),
+    envelope = encode_observation(
+        "nav2d.NavObs",
+        nav2d.NavData(
+            robot_pose=Pose(0, 0, 0, 0, 0, 0, 1),
+            goal=Pose(5, 0, 0, 0, 0, 0, 1),
+            obstacles=[(3.0, 1.5, 0.5)],
+        ),
     )
-    parsed = Observation.from_dict(observation.to_dict())
-    assert isinstance(parsed.data, NavData)
-    assert parsed.data.obstacles == [(3.0, 1.5, 0.5)]
+    parsed = decode_observation(envelope)
+    assert isinstance(parsed, nav2d.NavData)
+    assert parsed.obstacles == [(3.0, 1.5, 0.5)]
 
 
 def test_action_roundtrip():
-    action = Action(NAV, NavAction(v=0.5, w=0.1))
-    parsed = Action.from_dict(action.to_dict())
-    assert isinstance(parsed.data, NavAction)
-    assert parsed.data.v == 0.5
+    envelope = encode_action("nav2d.NavAction", nav2d.NavAction(v=0.5, w=0.1))
+    parsed = decode_action(envelope)
+    assert isinstance(parsed, nav2d.NavAction)
+    assert parsed.v == 0.5
 
 
 def test_result_roundtrip():
-    result = Result(SLAM, StampedPose(1.0, Pose(1, 2, 3, 0, 0, 0, 1)))
-    parsed = Result.from_dict(result.to_dict())
-    assert isinstance(parsed.data, StampedPose)
-    assert parsed.data.pose.z == 3.0
+    envelope = encode_result("pipe.slam.StampedPose", StampedPose(1.0, Pose(1, 2, 3, 0, 0, 0, 1)))
+    parsed = decode_result(envelope)
+    assert isinstance(parsed, StampedPose)
+    assert parsed.pose.z == 3.0
 
 
-def test_unknown_module_preserved():
-    observation = Observation(0.2, "manip", {"goal": [1, 2]})
-    parsed = Observation.from_dict(observation.to_dict())
-    assert parsed.module == "manip"
-    assert parsed.data == {"goal": [1, 2]}
+def test_ground_truth_roundtrip():
+    envelope = encode_ground_truth("pipe.slam.Trajectory", {"trajectory": []})
+    assert set(envelope) == {"schema", "v", "data"}
+    assert decode_ground_truth(envelope) == {"trajectory": []}
+
+
+def test_ground_truth_missing_fields_raises():
+    with pytest.raises(SchemaError):
+        decode_ground_truth({"data": {}})
+
+
+def test_unknown_schema_rejected():
+    """未知 schema 必须拒收（不再静默透传）。"""
+    with pytest.raises(SchemaError):
+        decode_observation({"schema": "manip.Obs", "v": 1, "enc": "msgpack", "blob": b"\x91\x80"})
+    with pytest.raises(SchemaError):
+        encode_observation("manip.Obs", slam.SlamData())

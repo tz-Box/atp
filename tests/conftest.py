@@ -10,8 +10,11 @@ from __future__ import annotations
 import os
 import socket
 import time
+from pathlib import Path
 
 import pytest
+
+_ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -23,6 +26,11 @@ def env_setup(tmp_path_factory):
     os.environ.setdefault("AUTOTEST_CONTROL_SERVICE", "autotest-test/control")
     os.environ.setdefault("AUTOTEST_JOB_STATUS_SERVICE", "autotest-test/job/status")
     os.environ["AUTOTEST_ARTIFACTS_DIR"] = str(tmp_path_factory.mktemp("artifacts"))
+    # 算法子进程经环境继承 import autotest（pytest pythonpath 仅作用于测试进程本身；
+    # 生产部署为 pip install，测试环境用 PYTHONPATH 等价模拟）
+    src = str(_ROOT / "src")
+    existing = os.environ.get("PYTHONPATH")
+    os.environ["PYTHONPATH"] = src if not existing else f"{src}{os.pathsep}{existing}"
     yield
 
 

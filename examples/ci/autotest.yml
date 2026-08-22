@@ -1,21 +1,30 @@
 # Autotest 评测 CI/CD 模板（放到算法仓库 .github/workflows/autotest.yml）
 #
-# 行为：
-#   - push 到 autotest 分支：自动评测，报告发 GitHub Issue + 内网接口
-#   - push 到 mannultest 分支：自动评测，报告仅发 GitHub Issue
-#   - 也可手动触发（workflow_dispatch）
+# 行为（v1.3 §4.3 通路1/通路3）：
+#   - 仅由 Hub 经 workflow_dispatch 触发（inputs: correlation_id/check_type/commit）；
+#   - runner 上 `client run --json` 评测，末步回调 Hub /api/ci/callback（Bearer 鉴权，
+#     携带实际 checkout 的 sha + conclusion + report{summary, run_url} + finished_at）。
 #
-# 前提（详见 docs/使用指南.md §八 CI/CD）：
-#   1) 仓库根目录有 scenario.yaml（manifest：module/launch/scenario/image 等）；
+# 前提（详见 docs/scheme/PatrolBox-三平台通信与接口总契约v1.3.md §4.3）：
+#   1) 仓库根目录有 scenario.yaml（manifest：launch/consumes/scenario/image 等）；
 #   2) runner 是 self-hosted（内网，能访问 Autotest Service 与 tzcomm daemon）；
 #   3) 评测服务已部署（常驻），按 manifest.image 用 docker+bind 拉起算法；
-#   4) 内网接口地址填到仓库 Secret `INNER_WEBHOOK_URL`（autotest 分支发报告用，可留空跳过）。
+#   4) Secret `HUB_CALLBACK_TOKEN`（hub.callback_token）+ 变量 `HUB_CALLBACK_URL` 已配置。
 name: Autotest Evaluation
 
 on:
-  push:
-    branches: [autotest, mannultest]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      correlation_id:
+        description: "Hub 生成的对账锚点（chk_<26位ULID>）"
+        required: true
+      check_type:
+        description: "检查类型"
+        required: false
+        default: "autotest"
+      commit:
+        description: "待评测的 commit sha"
+        required: true
 
 jobs:
   evaluate:
@@ -23,19 +32,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+
+      - name: Capture actual sha
+        # 通路3（手动，ref=分支）触发时 Hub 侧 sha 不定，以 runner 实际 checkout 为准回填
+        run: echo "ACTUAL_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Run evaluation
         id: eval
-        # 提交评测（阻塞等结果）；失败也继续，让报告把错误写回 issue
+        # 提交评测（阻塞等结果）；失败也继续，让末步把 failure 结论回传 Hub
         run: |
           python3 -m autotest.client run scenario.yaml --clock-rate 1.0 --json > report.json || true
 
-      - name: Send report
+      - name: Callback Hub
+        if: always()
         run: python3 ci/report.py report.json
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_SHA: ${{ github.sha }}
-          BRANCH: ${{ github.ref_name }}
-          # 内网接口地址（autotest 分支才发送；不配置则跳过）
-          INNER_WEBHOOK_URL: ${{ secrets.INNER_WEBHOOK_URL }}
+          HUB_CALLBACK_URL: ${{ vars.HUB_CALLBACK_URL }}
+          HUB_CALLBACK_TOKEN: ${{ secrets.HUB_CALLBACK_TOKEN }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+          CHECK_TYPE: ${{ inputs.check_type }}
+          ACTUAL_SHA: ${{ env.ACTUAL_SHA }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

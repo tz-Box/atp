@@ -1,11 +1,11 @@
-"""device 数据源：订阅 tzcomm 设备数据话题，转协议帧（Observation）。
+"""device 数据源：订阅 tzcomm 设备数据话题，转 observation 外层信封。
 
 两种模式（由是否有 converter 区分）：
-- 无 converter（透传，原行为）：设备侧产出协议帧（Observation envelope），
+- 无 converter（透传，原行为）：设备侧产出协议帧（observation 外层信封 dict），
   本类只订阅与透传，不做格式转换——`data_topic` 指设备发布的协议帧话题。
 - 有 converter（real-world device 层接入）：直接订阅设备强类型样本话题
-  （如 /device/source/lidar_front/data），由模块 converter 把 tzcomm dict
-  样本转成 Observation；话题名可经 tzcomm remap 配置化（代码名 ↔ 物理名）。
+  （如 /device/source/lidar_front/data），由插件 converter 把 tzcomm dict
+  样本转成外层信封；话题名可经 tzcomm remap 配置化（代码名 ↔ 物理名）。
 
 无论哪种模式，数据帧经会话 obs 话题再推给算法，对算法与 rosbag/rostopic 完全同接口。
 """
@@ -15,7 +15,6 @@ from typing import Optional
 
 import tzcomm
 
-from ..protocol.schema import Observation
 from .stream import StreamWorld
 
 
@@ -33,6 +32,10 @@ class DeviceWorld(StreamWorld):
         self._converter = converter
         self._node = tzcomm.Node(node_name)
 
+    @property
+    def produces(self) -> list[str]:
+        return list(getattr(self._converter, "produces", []))
+
     def _open(self) -> None:
         if self._converter is not None:
             for topic in self._converter.topics:
@@ -42,13 +45,13 @@ class DeviceWorld(StreamWorld):
         else:
             self._node.create_subscription(self._data_topic, self._push, qos=1)
 
-    def _to_observation(self, raw) -> Optional[Observation]:
+    def _to_observation(self, raw) -> Optional[dict]:
         if self._converter is not None:
             topic, msg = raw
             return self._converter.convert(topic, msg)
-        return Observation.from_dict(raw)
+        return raw  # 透传：设备侧已产 observation 外层信封 dict
 
-    def reset(self, testcase_id: str) -> Observation:
+    def reset(self, testcase_id: str) -> dict:
         if self._converter is not None:
             self._converter.reset()
         return super().reset(testcase_id)

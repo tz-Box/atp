@@ -3,13 +3,14 @@
 # 用途：算法仓库根目录放一份同名配置，评测方 `python3 -m autotest.client run <本文件>`
 # 即触发评测——Service 读本文件 → 加载场景 → 拉起算法（注入 AUTOTEST_SESSION/TOPICS）。
 #
-# 拷贝到算法仓库后按需修改：launch（启动命令）、scenario（建议场景，评测方可覆盖）、
-# hyperparams（算法超参，经 INIT 下发）、image（可选，docker+bind 运行则填镜像名）。
-module: slam                      # 模块：slam / nav / manip，必须与场景 module 一致
+# 拷贝到算法仓库后按需修改：launch（启动命令）、consumes（算法消费的 schema）、
+# scenario（建议场景，评测方可覆盖）、hyperparams（算法超参，经 INIT 下发）、
+# image（可选，docker+bind 运行则填镜像名）。
 launch: "python3 slam_algo.py"    # 启动命令（相对本文件所在目录执行）
-scenario: /home/user/TzTestService/scenarios/synthetic_slam.yaml   # 建议场景，评测方可 --scenario 覆盖
+consumes: ["pipe.slam.SlamObs"]   # 算法消费的数据 schema（v1.1 §3，取代旧 module 字段）
+scenario: scenarios/synthetic_slam.yaml   # 建议场景（相对评测服务仓库根目录；评测方可 --scenario 覆盖）
 # image: "registry.example/algo-slam:v1"   # 可选：填了则由 Service 以 docker+bind 方式拉起（--network host + bind 挂载本目录）
-required_sensors:                 # 算法需要的传感器实例（框架校验场景覆盖）
-  lidar: [lidar]
+required_sensors:                 # 算法需要的传感器实例（握手时按 body 资产校验，见 body/pbox_v1.yaml）
+  lidar: [front]
 hyperparams:                      # 算法超参（与场景 hyperparams 合并后经 INIT 下发）
   echo_placeholder: true

@@ -1,35 +1,41 @@
 """Autotest Service：常驻评测服务（judger）。
 
-进程模型：
-- 常驻服务（`python -m autotest.server`），持有场景 + GT + checker；
-- Client（`python -m autotest.client`）经 `autotest/control` 提交评测（算法 manifest），
-  立即拿到 job_id（异步），再经 `autotest/job/status` 轮询进度/结果；
-- Service 读算法 scenario.yaml（静态能力）→ 分配会话 → Launcher 拉起算法
-  （注入 AUTOTEST_SESSION/AUTOTEST_TOPICS）→ 会话握手（INIT/READY）→ 推流 → 打分。
-
-会话池：每个 job 一个独立会话（session_id 隔离），并发互不阻塞。
-yaml 取代"注册握手"：算法能力由 manifest 声明，会话身份由 Service 注入。
+v1.1 §3 冻结：
+- 从场景 body 字段加载本体资产，经 INIT 下发给算法；
+- 场景装配时校验 produces ⊇ consumes（fail fast）；
+- 插件导入改为命名空间路径（plugins.pipe.slam / plugins.nav2d）。
 """
 from __future__ import annotations
 
-import importlib
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Optional
 
 import tzcomm
 
+from ..body import load_body, BodyError
+from ..commcheck import build_health
+from ..eval.closed_loop import ClosedLoopSession
 from ..eval.runner import Runner
 from ..launcher import launch_algorithm, stop_process
 from ..manifest import load_algorithm_manifest
 from ..protocol import topics
-from ..registry import get_checker, get_dataset
+from ..registry import get_checker, get_dataset, load_plugin, validate_produces_consumes
 from ..scenario import load_scenario
 from .artifacts import ArtifactRecorder, artifacts_root
 from .job import Job, result_to_dict
 
 _JOB_TTL_SECONDS = 3600.0  # job 结果在池中保留时长（本版不清理，预留）
+
+# 仓库根目录（src/autotest/server/server.py → parents[3]），body/ 资产按此定位
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _namespace(key: str) -> str:
+    """注册键 → 插件命名空间（键去掉最后一段，如 pipe.slam.rosbag → pipe.slam）。"""
+    return key.rsplit(".", 1)[0]
 
 
 class AutotestService:
@@ -44,9 +50,15 @@ class AutotestService:
 
     # ---- Client → Service：提交评测（立即返回 job_id，异步执行） ----
     def _on_control(self, request: dict) -> dict:
+        command = request.get("command")
+        if command:
+            return self._on_debug_command(command, request)
         try:
             manifest = load_algorithm_manifest(request["manifest"])
             scenario_path = request.get("scenario") or manifest.scenario
+            if scenario_path and not Path(scenario_path).is_absolute():
+                # 相对路径相对算法仓库根（manifest 所在目录）解析，与 launch 工作目录语义一致
+                scenario_path = str(Path(manifest.dir) / scenario_path)
             scenario = load_scenario(scenario_path)
             # 评测方可覆盖场景的 checker（交叉测试矩阵用）
             if request.get("checker"):
@@ -55,10 +67,6 @@ class AutotestService:
                 scenario.checker_config = request["checker_config"]
         except Exception as exc:  # noqa: BLE001 配置错误直接回传给 client
             return {"error": f"{type(exc).__name__}: {exc}"}
-        if scenario.module != manifest.module:
-            return {
-                "error": f"算法模块 {manifest.module!r} 与场景模块 {scenario.module!r} 不一致"
-            }
 
         job_id = f"autotest-{uuid.uuid4().hex[:8]}"
         raw_rate = request.get("clock_rate")
@@ -75,6 +83,28 @@ class AutotestService:
         threading.Thread(target=self._run_job, args=(job,), daemon=True).start()
         return {"job_id": job_id}
 
+    # ---- Client → Service：调试命令（暂停/单步/继续，M-B3） ----
+    def _on_debug_command(self, command: str, request: dict) -> dict:
+        job_id = request.get("job_id", "")
+        with self._jobs_lock:
+            job = self._jobs.get(job_id)
+        if job is None:
+            return {"error": f"未知 job_id: {job_id!r}"}
+        if job.done.is_set():
+            return {"error": f"评测已结束: {job_id}"}
+        if command == "pause":
+            job.control.pause()
+        elif command == "resume":
+            job.control.resume()
+        elif command == "step":
+            n = int(request.get("n", 1))
+            if not job.control.step(n):
+                return {"error": "非暂停状态，step 无效（先 pause）"}
+        else:
+            return {"error": f"未知调试命令: {command!r}"}
+        return {"ok": True, "job_id": job_id, "run_state": job.control.state,
+                "frames": job.control.frames_sent}
+
     # ---- Client → Service：轮询进度/结果 ----
     def _on_job_status(self, request: dict) -> dict:
         job_id = request.get("job_id", "")
@@ -86,8 +116,11 @@ class AutotestService:
             return {
                 "job_id": job.job_id,
                 "status": "done" if job.done.is_set() else "running",
+                "run_state": job.control.state,
+                "frames": job.control.frames_sent,
                 "error": job.error,
                 "results": list(job.results),
+                "comm_health": job.comm_health,
             }
 
     def _run_job(self, job: Job) -> None:
@@ -97,23 +130,38 @@ class AutotestService:
             scenario = job.scenario
             manifest = job.manifest
 
-            recorder.log(f"提交: manifest={manifest.dir} scenario={scenario.module}")
+            recorder.log(f"提交: manifest={manifest.dir} body={scenario.body} dataset={scenario.dataset_type}")
+
+            # 0) 加载本体资产（v1.1 §8：body 必填）
+            try:
+                body = load_body(_REPO_ROOT / "body" / f"{scenario.body}.yaml")
+            except BodyError as exc:
+                raise ValueError(f"本体资产加载失败: {exc}") from exc
 
             # 1) 拉起算法，注入会话环境变量（算法据 AUTOTEST_SESSION/TOPICS 建接口）
             proc = launch_algorithm(manifest, job.session_id)
 
             # 2) 加载场景数据源与 checker（数据源工厂返回 IWorld：rosbag/rostopic/device 同接口）
-            importlib.import_module(f"modules.{scenario.module}")  # 触发 dataset/checker 注册
+            #    加载插件包触发注册（dataset 与 checker 可分属不同命名空间，都要加载）
+            load_plugin(_namespace(scenario.dataset_type))
+            if scenario.checker and _namespace(scenario.checker) != _namespace(scenario.dataset_type):
+                load_plugin(_namespace(scenario.checker))
             world = get_dataset(scenario.dataset_type)(**scenario.dataset_config)
             checker = get_checker(scenario.checker)() if scenario.checker else None
 
+            # 3) produces ⊇ consumes 校验（v1.1 §7.2 fail fast）
+            if checker and checker.consumes:
+                validate_produces_consumes(checker.consumes, world.produces)
+
             recorder.log(
                 f"数据源: {scenario.dataset_type} testcases={world.testcases} "
-                f"checker={scenario.checker or '无(数据流验证)'}"
+                f"checker={scenario.checker or '无(数据流验证)'} body={body.name}"
             )
 
-            # 3) 会话握手 + 推流 + 打分（progress_cb 逐 testcase 上报部分结果 + 留痕）
-            runner = Runner(world, checker, session_id=job.session_id)
+            # 4) 会话握手 + 推流/交互 + 打分（progress_cb 逐 testcase 上报部分结果 + 留痕）
+            #    闭环 World（closed_loop=True，如 SimWorld）走 ClosedLoopSession，否则走开环 Runner
+            session_cls = ClosedLoopSession if getattr(world, "closed_loop", False) else Runner
+            runner = session_cls(world, checker, body=body, session_id=job.session_id, control=job.control)
             try:
 
                 def _on_testcase(testcase_id: str, result: Any) -> None:
@@ -129,7 +177,7 @@ class AutotestService:
                 runner.run(
                     world.testcases,
                     init_config={
-                        "sensor_config": scenario.sensor_config,
+                        "sensor_config": body.sensor_topics,
                         "hyperparams": {**manifest.hyperparams, **scenario.hyperparams},
                     },
                     checker_config=scenario.checker_config,
@@ -137,6 +185,14 @@ class AutotestService:
                     progress_cb=_on_testcase,
                 )
             finally:
+                # 通信健康采集（close 前）：Service 侧快照 + SUT final 自统计 → comm_health
+                service_stats = runner.comm_snapshot()
+                sut_stats = ((runner.sut_final or {}).get("comm"))
+                health = build_health(service_stats, sut_stats)
+                with job.lock:
+                    job.comm_health = health
+                for warning in health["warnings"]:
+                    recorder.log(f"[comm] WARNING: {warning}")
                 runner.close()
         except Exception as exc:  # noqa: BLE001 结果回传给 client
             with job.lock:
@@ -152,18 +208,18 @@ class AutotestService:
                     "job_id": job.job_id,
                     "session_id": job.session_id,
                     "manifest": {
-                        "module": job.manifest.module,
                         "launch": job.manifest.launch,
                         "scenario": job.manifest.scenario,
                         "image": job.manifest.image,
                     },
                     "scenario": {
-                        "module": job.scenario.module,
+                        "body": job.scenario.body,
                         "dataset_type": job.scenario.dataset_type,
                     },
                     "clock_rate": job.clock_rate,
                     "results": list(job.results),
                     "error": job.error,
+                    "comm_health": job.comm_health,
                     "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
             )
@@ -177,6 +233,9 @@ class AutotestService:
 
 
 def main() -> None:
+    # 接管 tzcomm 诊断日志（重连/注册失败/回调异常等）：控制台 + ~/.tzcomm/app.log
+    # 级别走 TZCOMM_LOG_LEVEL（默认 INFO），DEBUG 可看 TCP 对账细节
+    tzcomm.setup_logging()
     service = AutotestService()
     try:
         service.spin()

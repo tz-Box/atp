@@ -5,19 +5,28 @@ AUTOTEST_SESSION/AUTOTEST_TOPICS（由 Service 注入）。
 """
 from __future__ import annotations
 
-from autotest.protocol.data.slam import SlamData  # noqa: F401  触发 data 注册
-from autotest.protocol.schema import SLAM, Result, StampedPose
+from autotest.protocol import messages as msg
+from autotest.protocol.schema import StampedPose, decode_observation, encode_result
+from autotest.registry import load_plugin
 from autotest.sdk import SutBase
+
+load_plugin("pipe.slam")  # 注册 pipe.slam schema 编解码器
 
 
 class EchoSlam(SutBase):
-    module = "slam"
+    module = "pipe.slam"
 
     def on_step(self, observation):
-        slam = observation.data  # SlamData
-        if slam.odom is None:
+        data = decode_observation(observation["data"])  # SlamData
+        if data.odom is None:
             return None
-        return Result(SLAM, StampedPose(timestamp=observation.timestamp, pose=slam.odom))
+        return msg.Result(
+            "pipe.slam",
+            encode_result(
+                "pipe.slam.StampedPose",
+                StampedPose(timestamp=observation["timestamp"], pose=data.odom),
+            ),
+        )
 
 
 def main() -> None:

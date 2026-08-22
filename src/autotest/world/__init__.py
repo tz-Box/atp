@@ -1,6 +1,6 @@
 """World 层：数据源对算法透明（rosbag / rostopic / device 同接口）。"""
 
-from .base import GroundTruth, IWorld
+from .base import IWorld
 from .replay import Dataset, DatasetWorld
 from .device import DeviceWorld
 from .rostopic import RosSubscription, RostopicWorld
@@ -12,7 +12,6 @@ __all__ = [
     "DatasetWorld",
     "DeviceWorld",
     "FrameAssembler",
-    "GroundTruth",
     "IWorld",
     "RosSubscription",
     "RostopicWorld",

@@ -4,6 +4,9 @@
   run <算法scenario.yaml> [--scenario <场景>]     提交一次评测并等待结果
   matrix <test_matrix.yaml> [--json]              交叉测试矩阵（多算法 × 场景/checker）
   report <job_id> [--save-baseline]               输出回归报告（与历史基线对比）
+  pause <job_id>                                  暂停喂帧（调试：世界冻结，SUT 安全等待）
+  step <job_id> [-n N]                            暂停中单步放行 N 帧（默认 1）
+  resume <job_id>                                 恢复全速
 
 流程：
   1) 经 autotest/control 提交评测（manifest 路径），拿到 job_id（异步）；
@@ -43,6 +46,8 @@ def _submit_and_wait(node: tzcomm.Node, request: dict) -> dict:
     resp = ctl.call(request, timeout=_CONTROL_TIMEOUT)
     if resp.get("error"):
         return {"error": resp["error"]}
+    # job_id 是调试入口（pause/step/resume）：打 stderr，保持 --json 的 stdout 干净
+    print(f"job_id: {resp['job_id']}（调试：python3 -m autotest.client pause/step/resume <job_id>）", file=sys.stderr)
 
     status = node.create_service_client(topics.job_status_service())
     deadline = time.monotonic() + _CONTROL_TIMEOUT
@@ -80,9 +85,16 @@ def run(manifest: str, scenario: str | None = None, clock_rate: float | None = N
     if state.get("error"):
         return _emit_error(state["error"], as_json)
     if as_json:
-        print(json.dumps({"ok": True, "results": state.get("results", [])}, ensure_ascii=False))
+        print(json.dumps({
+            "ok": True,
+            "results": state.get("results", []),
+            "comm_health": state.get("comm_health"),
+        }, ensure_ascii=False))
     else:
         _print_results(state.get("results", []))
+        comm = state.get("comm_health")
+        if comm and comm.get("warnings"):
+            print(f"通信告警: {comm['warnings']}")
     return 0
 
 
@@ -125,6 +137,26 @@ def matrix(matrix_path: str, as_json: bool = False) -> int:
                     print(f"  {r['testcase_id']}: {r['metrics']} passed={r['passed']}")
                 else:
                     print(f"  {r['testcase_id']}: 数据流验证（records={r['n_records']}）")
+    return 0
+
+
+def debug_command(command: str, job_id: str, n: int = 1, as_json: bool = False) -> int:
+    """发送调试命令（pause/step/resume）到 control 服务，返回退出码。"""
+    node = tzcomm.Node("autotest-debug")
+    try:
+        ctl = node.create_service_client(topics.control_service())
+        request: dict = {"command": command, "job_id": job_id}
+        if command == "step":
+            request["n"] = n
+        resp = ctl.call(request, timeout=_CONTROL_TIMEOUT)
+    finally:
+        node.close()
+    if resp.get("error"):
+        return _emit_error(resp["error"], as_json)
+    if as_json:
+        print(json.dumps(resp, ensure_ascii=False))
+    else:
+        print(f"{command} {job_id}: run_state={resp['run_state']} frames={resp['frames']}")
     return 0
 
 
@@ -171,6 +203,19 @@ def main(argv: list[str] | None = None) -> int:
     report_parser.add_argument("--baseline", default=None, help="基线 report.json 路径（默认 artifacts/baseline.json）")
     report_parser.add_argument("--save-baseline", action="store_true", help="把该次评测保存为基线")
 
+    pause_parser = sub.add_parser("pause", help="暂停喂帧（调试：世界冻结，SUT 安全等待）")
+    pause_parser.add_argument("job_id", help="评测 job_id")
+    pause_parser.add_argument("--json", action="store_true", help="以 JSON 输出")
+
+    step_parser = sub.add_parser("step", help="暂停中单步放行 N 帧")
+    step_parser.add_argument("job_id", help="评测 job_id")
+    step_parser.add_argument("-n", type=int, default=1, help="放行帧数（默认 1）")
+    step_parser.add_argument("--json", action="store_true", help="以 JSON 输出")
+
+    resume_parser = sub.add_parser("resume", help="恢复全速")
+    resume_parser.add_argument("job_id", help="评测 job_id")
+    resume_parser.add_argument("--json", action="store_true", help="以 JSON 输出")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "run":
@@ -179,6 +224,12 @@ def main(argv: list[str] | None = None) -> int:
         return matrix(args.matrix, as_json=args.json)
     if args.cmd == "report":
         return report(args.job_id, baseline=args.baseline, save=args.save_baseline)
+    if args.cmd == "pause":
+        return debug_command("pause", args.job_id, as_json=args.json)
+    if args.cmd == "step":
+        return debug_command("step", args.job_id, n=args.n, as_json=args.json)
+    if args.cmd == "resume":
+        return debug_command("resume", args.job_id, as_json=args.json)
     parser.error(f"未知命令: {args.cmd}")
     return 2
 

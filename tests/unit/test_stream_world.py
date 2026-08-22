@@ -1,7 +1,7 @@
 """测试内容：StreamWorld 缓冲语义（reset 首帧 / step 顺序 / max_frames 耗尽 / 空闲超时）。
 
 真实数据源的回调是异步的，因此测试按真实时序模拟：先 reset（阻塞等首帧），
-再喂帧（feed 模拟订阅回调入队）。
+再喂帧（feed 模拟订阅回调入队）。帧为 observation 外层信封 dict。
 """
 from __future__ import annotations
 
@@ -10,8 +10,7 @@ import time
 
 import pytest
 
-from autotest.protocol.data.slam import SlamData
-from autotest.protocol.schema import SLAM, Observation
+from autotest.protocol.schema import make_observation
 from autotest.world import StreamWorld
 
 
@@ -24,12 +23,12 @@ class _FeedWorld(StreamWorld):
     def _to_observation(self, raw):
         return raw
 
-    def feed(self, obs: Observation) -> None:
+    def feed(self, obs: dict) -> None:
         self._push(obs)
 
 
-def _obs(ts: float) -> Observation:
-    return Observation(ts, SLAM, SlamData(sensors={"lidar": {"lidar": [[0.0, 0.0, 0.0]]}}))
+def _obs(ts: float) -> dict:
+    return make_observation("test.stream", ts, {"schema": "test.Raw", "v": 1, "enc": "none", "blob": b""})
 
 
 def test_stream_buffer_and_max_frames() -> None:
@@ -44,14 +43,14 @@ def test_stream_buffer_and_max_frames() -> None:
     world.feed(_obs(1.0))
     world.feed(_obs(2.0))
     reset_t.join(timeout=5)
-    assert holder["first"].timestamp == 0.0
+    assert holder["first"]["timestamp"] == 0.0
 
     frames = []
     while True:
         observation, done, _ = world.step()
         if done:
             break
-        frames.append(observation.timestamp)
+        frames.append(observation["timestamp"])
     assert frames == [1.0, 2.0]
     world.close()
 
@@ -65,7 +64,7 @@ def test_stream_idle_timeout_done() -> None:
     time.sleep(0.1)
     world.feed(_obs(0.0))
     reset_t.join(timeout=5)
-    assert holder["first"].timestamp == 0.0
+    assert holder["first"]["timestamp"] == 0.0
 
     observation, done, info = world.step()
     assert observation is None

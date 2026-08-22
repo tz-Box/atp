@@ -11,8 +11,8 @@ from typing import Optional
 
 from ..protocol import messages as msg
 from ..protocol import topics
-from ..protocol.schema import Result
 from ..world.base import IWorld
+from .run_control import RunControl
 
 _RESULT_TIMEOUT = 30.0
 
@@ -28,7 +28,7 @@ class Loader:
         self._session_id = session_id
         self._obs_pub = node.create_publisher(topics.obs_topic(session_id), qos=1)
         self._result_sub = node.create_subscription(topics.result_topic(session_id), self._on_result)
-        self._results: list[Result] = []
+        self._results: list[dict] = []
         self._results_lock = threading.Lock()
         self._seq = 0  # 数据帧序号：排查丢帧时按 0..n-1 对账
 
@@ -37,12 +37,14 @@ class Loader:
         with self._results_lock:
             self._results.append(result)
 
-    def load(self, testcase_id: str, clock_rate: Optional[float] = 1.0) -> list[Result]:
-        """推完一个 testcase 的数据流并收齐结果，返回 records。
+    def load(self, testcase_id: str, clock_rate: Optional[float] = 1.0,
+             control: Optional[RunControl] = None) -> list[dict]:
+        """推完一个 testcase 的数据流并收齐结果，返回 result 信封 dict 列表。
 
         clock_rate：1.0 = 实时复现（每帧按原始时间戳间隔 sleep，保留帧率波动/突发）；
         >1 加速，<1 减速，0/None = 全速（不 sleep，降级选项）。
         实时数据源（world.realtime=True，如 device/rostopic）自带节奏，不额外 sleep。
+        control：调试闸门（暂停/单步），仅数据帧过闸；终止帧（done=True）协议收尾直达。
         """
         with self._results_lock:
             self._results = []
@@ -51,6 +53,8 @@ class Loader:
         observation = self._world.reset(testcase_id)
         n_sent = 0
         while True:
+            if control is not None:
+                control.wait_gate()
             self._publish_step(observation, done=False)
             n_sent += 1
             next_obs, done, _ = self._world.step()
@@ -77,13 +81,14 @@ class Loader:
         self._obs_pub.publish(message.to_dict())
 
     @staticmethod
-    def _pace(clock_rate: Optional[float], current, next_obs) -> None:
+    def _pace(clock_rate: Optional[float], current: dict, next_obs: Optional[dict]) -> None:
         """按原始帧间隔等待：sleep((next.timestamp - current.timestamp) / clock_rate)。
 
         0/None 全速；1.0 实时复现原始帧率（含波动）；>1 加速；<1 减速。
+        timestamp 取 observation 外层信封的 timestamp 字段（§5.4 唯一权威时间）。
         """
         if not clock_rate or next_obs is None:
             return
-        dt = next_obs.timestamp - current.timestamp
+        dt = float(next_obs.get("timestamp", 0.0)) - float(current.get("timestamp", 0.0))
         if dt > 0:
             time.sleep(dt / clock_rate)

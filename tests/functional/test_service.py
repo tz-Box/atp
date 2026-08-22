@@ -1,7 +1,7 @@
 """测试内容：常驻 Service（会话池）+ 算法 manifest（scenario.yaml）+ 环境变量注入 端到端。
 
 流程：
-    1) 算法仓库根目录有 scenario.yaml（静态声明 module/launch/scenario）；
+    1) 算法仓库根目录有 scenario.yaml（静态声明 launch/consumes/scenario）；
     2) Client 经 autotest/control 提交 manifest，立即拿到 job_id（异步）；
     3) Client 经 autotest/job/status 轮询到完成；
     4) Service 读 manifest → 加载场景 → 分配会话 → Launcher 拉起算法
@@ -30,12 +30,12 @@ _SCENARIO = str(_ROOT / "scenarios" / "synthetic_slam.yaml")
 _POLL_INTERVAL = 0.2
 
 
-def _write_manifest(tmp_path: Path, module: str = "slam") -> str:
+def _write_manifest(tmp_path: Path) -> str:
     manifest = {
-        "module": module,
         "launch": f"{sys.executable} {_ALGO}",
+        "consumes": ["pipe.slam.SlamObs"],
         "scenario": _SCENARIO,
-        "required_sensors": {"lidar": ["lidar"]},
+        "required_sensors": {"lidar": ["front"]},
     }
     manifest_path = tmp_path / "scenario.yaml"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -43,14 +43,17 @@ def _write_manifest(tmp_path: Path, module: str = "slam") -> str:
     return str(manifest_path)
 
 
-def _submit(manifest: str) -> dict:
+def _submit(manifest: str, checker: str = "") -> dict:
     """提交评测并轮询到完成，返回最终状态（含 job_id/results/error）。"""
     node = tzcomm.Node("test-client")
     try:
         ctl = node.create_service_client(topics.control_service())
         if not ctl.wait_for_server(timeout=5):
             raise RuntimeError("control 服务不可用")
-        resp = ctl.call({"manifest": manifest, "clock_rate": 0}, timeout=30)  # 全速，避免测试按实时帧间隔等待
+        request = {"manifest": manifest, "clock_rate": 0}  # 全速，避免测试按实时帧间隔等待
+        if checker:
+            request["checker"] = checker  # 评测方覆盖场景 checker（交叉测试矩阵路径）
+        resp = ctl.call(request, timeout=30)
         if "error" in resp:
             return resp
 
@@ -101,16 +104,17 @@ def test_service_manifest_run(daemon, tmp_path):
     assert "testcase" in (artifact_dir / "session.log").read_text(encoding="utf-8")
 
 
-def test_service_rejects_mismatched_module(daemon, tmp_path):
-    manifest_path = _write_manifest(tmp_path, module="nav")
+def test_service_rejects_unsatisfied_consumes(daemon, tmp_path):
+    """装配校验 fail fast：覆盖的 checker 声明 consumes 不被 dataset produces 满足 → 报错。"""
+    manifest_path = _write_manifest(tmp_path)
     service = _start_service()
     try:
-        resp = _submit(manifest_path)
+        resp = _submit(manifest_path, checker="nav2d.default")  # consumes nav2d.NavObs
     finally:
         service.close()
 
     assert "error" in resp
-    assert "不一致" in resp["error"]
+    assert "场景装配失败" in resp["error"]
 
 
 def test_service_rejects_missing_manifest(daemon, tmp_path):
@@ -126,8 +130,8 @@ def test_service_rejects_missing_manifest(daemon, tmp_path):
 
 def test_service_parallel_jobs(daemon, tmp_path):
     """会话池：两个 job 并发提交，互不阻塞，各自完成。"""
-    m1 = _write_manifest(tmp_path / "a", module="slam")
-    m2 = _write_manifest(tmp_path / "b", module="slam")
+    m1 = _write_manifest(tmp_path / "a")
+    m2 = _write_manifest(tmp_path / "b")
     service = _start_service()
 
     holder: dict = {}

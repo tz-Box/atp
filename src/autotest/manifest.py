@@ -1,7 +1,6 @@
 """算法侧静态注册声明：算法仓库根目录的 scenario.yaml。
 
-由算法开发者编写，声明算法的能力与建议配置；评测服务读取后
-分配会话并拉起算法（yaml 取代"注册握手"的静态部分，会话仍由服务注入）。
+v1.1 §3 冻结：module 常量化移除，改由 consumes 列表声明算法消费的数据 schema。
 """
 from __future__ import annotations
 
@@ -13,8 +12,8 @@ import yaml
 
 @dataclass
 class AlgorithmManifest:
-    module: str  # slam / nav / manip
     launch: str  # 启动命令（在算法根目录执行）
+    consumes: list[str] = field(default_factory=list)  # 算法声明的输入 schema（命名空间键）
     scenario: str = ""  # 建议场景（评测方可覆盖）
     required_sensors: dict = field(default_factory=dict)  # {类型: [实例名...]}
     output_topic: str = ""  # 算法自有产物 topic（ROS 侧，可选）
@@ -30,8 +29,8 @@ def load_algorithm_manifest(path: str) -> AlgorithmManifest:
         raise FileNotFoundError(f"算法 manifest 不存在: {p}")
     data = yaml.safe_load(p.read_text(encoding="utf-8"))
     manifest = AlgorithmManifest(
-        module=data["module"],
         launch=data["launch"],
+        consumes=data.get("consumes", []),
         scenario=data.get("scenario", ""),
         required_sensors=data.get("required_sensors", {}),
         output_topic=data.get("output_topic", ""),

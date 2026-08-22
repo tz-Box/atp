@@ -3,16 +3,21 @@
 """
 import pytest
 
+from autotest.protocol.schema import decode_ground_truth, decode_observation
+from autotest.registry import load_plugin
 from autotest.world import DatasetWorld
-from modules.slam import SyntheticSlamDataset
+
+slam = load_plugin("pipe.slam")
+SyntheticSlamDataset = slam.SyntheticSlamDataset
 
 
 def test_openloop_replay():
     dataset = SyntheticSlamDataset(n_testcases=1, n_steps=5, seed=1)
     world = DatasetWorld(dataset)
     first = world.reset("tc0")
-    assert first.timestamp == 0.0
-    assert first.data.odom is not None
+    assert first["timestamp"] == 0.0
+    assert first["module"] == "pipe.slam"
+    assert decode_observation(first["data"]).odom is not None
 
     count = 1
     while True:
@@ -23,7 +28,8 @@ def test_openloop_replay():
         assert observation is not None
 
     assert count == 5
-    assert len(world.get_ground_truth().data["trajectory"]) == 5
+    gt = world.get_ground_truth()
+    assert len(decode_ground_truth(gt)["trajectory"]) == 5
     world.close()
 
 

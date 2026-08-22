@@ -1,6 +1,6 @@
-"""rostopic 数据源：实时订阅 ROS 话题，经模块转换器产协议帧。
+"""rostopic 数据源：实时订阅 ROS 话题，经插件转换器产 observation 外层信封。
 
-转换器由模块提供（如 modules/slam/io.py），负责声明订阅清单并做消息转换；
+转换器由插件提供（如 plugins/pipe.slam/convert.py），负责声明订阅清单并做消息转换；
 数据帧经会话 obs 话题推给算法，与 rosbag / device 完全同接口。
 """
 from __future__ import annotations
@@ -9,7 +9,6 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from ..protocol.schema import Observation
 from .stream import StreamWorld
 
 
@@ -36,6 +35,10 @@ class RostopicWorld(StreamWorld):
         self._executor = None
         self._spin_thread: Optional[threading.Thread] = None
 
+    @property
+    def produces(self) -> list[str]:
+        return list(getattr(self._converter, "produces", []))
+
     def _open(self) -> None:
         import rclpy
 
@@ -53,11 +56,11 @@ class RostopicWorld(StreamWorld):
         self._spin_thread = threading.Thread(target=self._executor.spin, daemon=True)
         self._spin_thread.start()
 
-    def _to_observation(self, raw: tuple[str, Any]) -> Optional[Observation]:
+    def _to_observation(self, raw: tuple[str, Any]) -> Optional[dict]:
         topic, msg = raw
         return self._converter.convert(topic, msg)
 
-    def reset(self, testcase_id: str) -> Observation:
+    def reset(self, testcase_id: str) -> dict:
         self._converter.reset()
         return super().reset(testcase_id)
 
@@ -65,9 +68,10 @@ class RostopicWorld(StreamWorld):
         super().close()
         if self._rclpy_node is not None:
             self._rclpy_node.destroy_node()
-        try:
-            import rclpy
+            self._rclpy_node = None
+            try:
+                import rclpy
 
-            rclpy.shutdown()
-        except ImportError:
-            pass
+                rclpy.shutdown()
+            except ImportError:
+                pass

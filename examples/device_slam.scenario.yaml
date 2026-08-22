@@ -8,9 +8,9 @@
 # - 需要设备数据在跑（Patrol Box device 层发布 /device/source/*/data）；
 # - device 数据源是实时流（world.realtime），Loader 不做 pacing，实时推给算法；
 # - 多实例 lidar（front/rear）经 FrameAssembler 按 header.stamp 容差对齐后产帧。
-module: slam
+body: pbox_v1
 dataset:
-  type: device_slam
+  type: pipe.slam.device
   config:
     topic_map:
       lidar:
@@ -19,7 +19,4 @@ dataset:
       imu:
         imu: /device/source/body_imu/data
     tolerance: 0.05          # 同步容差（秒），可选，默认 0.05
-# checker: slam              # 实时源无 GT，省略 checker 时做数据流验证（只统计 records 数）
-sensor_config:
-  lidar: { front: /device/source/lidar_front/data, rear: /device/source/lidar_rear/data }
-  imu: { imu: /device/source/body_imu/data }
+# checker: pipe.slam.ape   # 实时源无 GT，省略 checker 时做数据流验证（只统计 records 数）

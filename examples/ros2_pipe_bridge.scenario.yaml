@@ -5,13 +5,13 @@
 #
 # 注意：bridge 需要 ROS 环境（rclpy + fast_lio.msg），launch 里先 source；
 # 本示例按 TzTestTools/fast_lio_ws 部署路径填写，算法仓库按实际路径改。
-module: slam                      # 模块：slam / nav / manip，必须与场景 module 一致
 launch: >
   bash -c "source /opt/ros/humble/setup.bash &&
            source /home/user/TzTestTools/fast_lio_ws/install/setup.bash &&
            python3 ros2_pipe_bridge.py"
-scenario: /home/user/TzTestService/scenarios/pipe_real.yaml   # 建议场景，评测方可 --scenario 覆盖
+consumes: ["pipe.slam.SlamObs"]   # 算法消费的数据 schema（v1.1 §3，取代旧 module 字段）
+scenario: scenarios/pipe_real.yaml   # 建议场景（相对评测服务仓库根目录；评测方可 --scenario 覆盖）
 # image: "registry.example/algo-fastlio:v1"   # 可选：docker+bind 方式（见 slam_algo.scenario.yaml 注释）
-required_sensors:                 # bridge 转发给 ROS 算法所需传感器（框架校验场景覆盖）
+required_sensors:                 # bridge 转发给 ROS 算法所需传感器（握手时按 body 资产校验）
   lidar: [front, rear]
 output_topic: /cylinder_extraction_independent/result   # 算法自有产物话题（记录用，非评测输入）

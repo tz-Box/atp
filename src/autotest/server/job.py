@@ -5,6 +5,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from ..eval.run_control import RunControl
 from ..manifest import AlgorithmManifest
 from ..scenario import Scenario
 
@@ -19,6 +20,8 @@ class Job:
     done: threading.Event = field(default_factory=threading.Event)
     results: list[dict] = field(default_factory=list)
     error: Optional[str] = None
+    comm_health: dict = field(default_factory=dict)  # 通信健康（双侧丢包 + 告警），评测结束时采集
+    control: RunControl = field(default_factory=RunControl)  # 调试闸门（暂停/单步），随 Job 创建
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 

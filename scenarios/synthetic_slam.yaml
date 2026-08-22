@@ -1,6 +1,6 @@
-module: slam
+body: pbox_v1
 dataset:
-  type: synthetic_slam
+  type: pipe.slam.synthetic
   config: { n_testcases: 2, n_steps: 20, seed: 7 }
-checker: slam
+checker: pipe.slam.ape
 checker_config: { ate_threshold: 0.2, rpe_threshold: 0.1 }

@@ -1,14 +1,22 @@
-"""测试内容：SlamDeviceConverter——tzcomm 样本 dict（/device/source/*/data）→ SlamData 帧。
+"""测试内容：SlamDeviceConverter——tzcomm 样本 dict（/device/source/*/data）→ observation 外层信封。
 
 纯逻辑（无网络）：PointCloud2 / Imu 的 dict 解析 + FrameAssembler 多实例同步。
 """
 from __future__ import annotations
 
+import importlib
+
 import numpy as np
 import pytest
 
-from autotest.protocol.schema import SLAM
-from modules.slam.convert import SlamDeviceConverter, imu_from_dict, pointcloud_xyz_from_dict
+from autotest.protocol.schema import decode_observation
+from autotest.registry import load_plugin
+
+load_plugin("pipe.slam")
+convert = importlib.import_module("plugins.pipe.slam.convert")
+SlamDeviceConverter = convert.SlamDeviceConverter
+imu_from_dict = convert.imu_from_dict
+pointcloud_xyz_from_dict = convert.pointcloud_xyz_from_dict
 
 _FIELDS = [
     {"name": "x", "offset": 0, "datatype": 7, "count": 1},  # 7 = float32
@@ -70,14 +78,14 @@ def test_stamp_prefers_t_ref_ns() -> None:
     conv = SlamDeviceConverter(topic_map={"lidar": {"front": "/pc_front"}, "imu": {"imu": "/imu"}})
     obs = conv.convert("/pc_front", raw)
     assert obs is not None
-    assert obs.timestamp == pytest.approx(200.0)
+    assert obs["timestamp"] == pytest.approx(200.0)
 
 
 def test_stamp_falls_back_to_header_stamp() -> None:
     conv = SlamDeviceConverter(topic_map={"lidar": {"front": "/pc_front"}, "imu": {"imu": "/imu"}})
     obs = conv.convert("/pc_front", _pc2(sec=100.5))
     assert obs is not None
-    assert obs.timestamp == pytest.approx(100.5)
+    assert obs["timestamp"] == pytest.approx(100.5)
 
 
 # ---- converter 帧组装 ----
@@ -86,9 +94,10 @@ def test_device_converter_produces_frame() -> None:
     assert conv.convert("/imu", _imu()) is None  # imu 只进 assembler，不产帧
     obs = conv.convert("/pc_front", _pc2())
     assert obs is not None
-    assert obs.module == SLAM
-    assert obs.timestamp == pytest.approx(100.0)
-    lidar = obs.data.sensors["lidar"]["front"]
+    assert obs["module"] == "pipe.slam"
+    assert obs["timestamp"] == pytest.approx(100.0)
+    payload = decode_observation(obs["data"])
+    lidar = payload.sensors["lidar"]["front"]
     assert lidar.shape == (4, 3)
 
 
@@ -100,8 +109,9 @@ def test_device_converter_requires_all_lidar_instances() -> None:
     assert conv.convert("/pc_front", _pc2()) is None  # rear 未就绪（窗口外）→ 不产帧
     obs = conv.convert("/pc_rear", _pc2())
     assert obs is not None
-    assert set(obs.data.sensors["lidar"]) == {"front", "rear"}
-    assert "imu" in obs.data.sensors  # unbounded 类型取最近帧
+    payload = decode_observation(obs["data"])
+    assert set(payload.sensors["lidar"]) == {"front", "rear"}
+    assert "imu" in payload.sensors  # unbounded 类型取最近帧
 
 
 def test_device_converter_reset_clears_assembler() -> None:

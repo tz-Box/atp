@@ -1,8 +1,8 @@
 """测试内容：device 数据源端到端（tzcomm 发布 → DeviceWorld 出帧）。
 
-- 透传模式：设备发布协议帧（Observation envelope），DeviceWorld 直接透传。
+- 透传模式：设备发布协议帧（observation 外层信封 dict），DeviceWorld 直接透传。
 - converter 模式：设备发布强类型样本 dict（PointCloud2 / Imu），
-  SlamDeviceConverter 转成 SlamData 帧（real-world device 层接入路径）。
+  SlamDeviceConverter 转成 observation 外层信封（real-world device 层接入路径）。
 """
 from __future__ import annotations
 
@@ -13,11 +13,13 @@ import uuid
 import numpy as np
 import tzcomm
 
-import modules.slam  # noqa: F401  注册 observation decoder
-from autotest.protocol.data.slam import SlamData
-from autotest.protocol.schema import SLAM, Observation
+from autotest.protocol.schema import decode_observation, encode_observation, make_observation
+from autotest.registry import load_plugin
 from autotest.world import DeviceWorld
-from modules.slam.convert import SlamDeviceConverter
+
+slam = load_plugin("pipe.slam")  # 注册 observation decoder
+SlamData = slam.SlamData
+SlamDeviceConverter = slam.SlamDeviceConverter
 
 _FIELDS = [
     {"name": "x", "offset": 0, "datatype": 7, "count": 1},  # 7 = float32
@@ -26,11 +28,14 @@ _FIELDS = [
 ]
 
 
-def _frame(i: int) -> Observation:
-    return Observation(
+def _frame(i: int) -> dict:
+    return make_observation(
+        "pipe.slam",
         float(i),
-        SLAM,
-        SlamData(sensors={"lidar": {"lidar": np.zeros((4, 3), np.float32)}}),
+        encode_observation(
+            "pipe.slam.SlamObs",
+            SlamData(sensors={"lidar": {"lidar": np.zeros((4, 3), np.float32)}}),
+        ),
     )
 
 
@@ -71,7 +76,7 @@ def test_device_world_end_to_end(daemon) -> None:
 
     def _feed() -> None:
         for i in range(3):
-            pub.publish(_frame(i).to_dict())
+            pub.publish(_frame(i))
             time.sleep(0.1)
 
     try:
@@ -84,8 +89,9 @@ def test_device_world_end_to_end(daemon) -> None:
         reset_t.join(timeout=10)
         assert not reset_t.is_alive(), "首帧等待超时"
         first = holder["first"]
-        assert first.timestamp == 0.0
-        assert first.data.sensors["lidar"]["lidar"].shape == (4, 3)
+        assert first["timestamp"] == 0.0
+        payload = decode_observation(first["data"])
+        assert payload.sensors["lidar"]["lidar"].shape == (4, 3)
 
         frames = [first]
         while True:
@@ -93,7 +99,7 @@ def test_device_world_end_to_end(daemon) -> None:
             if done:
                 break
             frames.append(observation)
-        assert [f.timestamp for f in frames] == [0.0, 1.0, 2.0]
+        assert [f["timestamp"] for f in frames] == [0.0, 1.0, 2.0]
         feed_t.join(timeout=5)
     finally:
         world.close()
@@ -101,7 +107,7 @@ def test_device_world_end_to_end(daemon) -> None:
 
 
 def test_device_world_converter_end_to_end(daemon) -> None:
-    """real-world device 层路径：发布强类型样本 dict，converter 转 SlamData 帧。"""
+    """real-world device 层路径：发布强类型样本 dict，converter 转 observation 外层信封。"""
     uid = uuid.uuid4().hex[:8]
     front_topic = f"/device/source/lidar_front-{uid}"
     rear_topic = f"/device/source/lidar_rear-{uid}"
@@ -138,13 +144,14 @@ def test_device_world_converter_end_to_end(daemon) -> None:
         reset_t.join(timeout=10)
         assert not reset_t.is_alive(), "首帧等待超时"
         first = holder["first"]
-        assert first.timestamp == 100.0
-        assert set(first.data.sensors["lidar"]) == {"front", "rear"}
-        assert "imu" in first.data.sensors  # unbounded 类型带最近帧
+        assert first["timestamp"] == 100.0
+        payload = decode_observation(first["data"])
+        assert set(payload.sensors["lidar"]) == {"front", "rear"}
+        assert "imu" in payload.sensors  # unbounded 类型带最近帧
 
         obs, done, _ = world.step()
         assert not done
-        assert obs.timestamp == 101.0
+        assert obs["timestamp"] == 101.0
         feed_t.join(timeout=5)
     finally:
         world.close()

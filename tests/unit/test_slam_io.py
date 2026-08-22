@@ -4,13 +4,21 @@
 """
 from __future__ import annotations
 
+import importlib
 import sys
 from types import ModuleType
 
 import numpy as np
 
-from autotest.protocol.schema import SLAM
-from modules.slam.convert import SlamRostopicConverter, imu_from_msg, pointcloud_xyz, read_pipe_segment
+from autotest.protocol.schema import decode_observation
+from autotest.registry import load_plugin
+
+load_plugin("pipe.slam")
+convert = importlib.import_module("plugins.pipe.slam.convert")
+SlamRostopicConverter = convert.SlamRostopicConverter
+imu_from_msg = convert.imu_from_msg
+pointcloud_xyz = convert.pointcloud_xyz
+read_pipe_segment = convert.read_pipe_segment
 
 
 def _install_fake_sensor_msgs() -> None:
@@ -108,10 +116,11 @@ def test_converter_imu_cache_and_lidar_frame() -> None:
     obs = conv.convert("/pc_front", msg)
 
     assert obs is not None
-    assert obs.module == SLAM
-    assert obs.timestamp == 1.5
-    assert obs.data.sensors["lidar"]["front"].shape == (4, 3)
-    assert obs.data.sensors["imu"]["imu"].angular_velocity == [0.1, 0.2, 0.3]
+    assert obs["module"] == "pipe.slam"
+    assert obs["timestamp"] == 1.5
+    payload = decode_observation(obs["data"])
+    assert payload.sensors["lidar"]["front"].shape == (4, 3)
+    assert payload.sensors["imu"]["imu"].angular_velocity == [0.1, 0.2, 0.3]
 
     # 未声明话题不产帧
     assert conv.convert("/unknown", msg) is None

@@ -1,6 +1,6 @@
-module: slam
+body: pbox_v1
 dataset:
-  type: rosbag_slam
+  type: pipe.slam.rosbag
   config:
     root: data/pipe-real
     topic_map:
@@ -11,11 +11,6 @@ dataset:
         imu: /IMU
     gt_dir: data/pipe-real/gt
     max_frames: 100                      # 冒烟测试：足够让 fastlio 出中轴线
-checker: pipe
+checker: pipe.slam.pipe
 checker_config: { center_tolerance: 0.3, direction_tolerance_deg: 5.0 }
-sensor_config:
-  lidar:
-    front: /rslidar_points_front
-    rear: /rslidar_points_rear
-  imu:
-    imu: /IMU
+# INIT 下发的 sensor_config 由 body 资产生成（body/pbox_v1.yaml），场景不重复声明
