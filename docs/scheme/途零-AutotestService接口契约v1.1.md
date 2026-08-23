@@ -256,7 +256,9 @@ hyperparams: {...}            # 算法超参,经 INIT 下发
 
 ## 11. CI/CD 对接(沿用 v1.0 + 总契约修订)
 
-- 现状:分支 push(`autotest`/`mannultest*`)或 dispatch → runner 上 `client run --json` → report.py 发 Issue/webhook。
+- 现状:~~分支 push(`autotest`/`mannultest*`)或 dispatch~~ → runner 上 `client run --json` → report.py 回调 Hub。
+  **D3 已拍板(v1.3 §4.3)**:push 分支监听已废弃,触发一律为 Hub `workflow_dispatch`(通路1 自动/通路3 手动);
+  report.py 不再发 Issue/webhook,唯一出口是 Hub `/api/ci/callback`(Bearer,env `HUB_CALLBACK_URL`/`HUB_CALLBACK_TOKEN`)。
 - Hub 编排(Hub Phase 0/1):workflow_dispatch 入参 `correlation_id`/`check_type`;末步 POST Hub `/api/ci/callback`(Bearer)。
 - **本版修订(承接总契约评审)**:**回调必须携带实际 checkout 的 `sha`**、`conclusion`、`finished_at`(手动通路下触发时 sha 不定,不补则 PMS 按 sha 查询链断裂);手动测试分支约定为 `mannultest/*` 前缀(可 per-user/per-run),不锁定单一 `mannultest` 分支。
 - autotest 本体不因 Hub 改动;对 Hub 只暴露 workflow 回调一个应用层接口。
@@ -277,9 +279,9 @@ hyperparams: {...}            # 算法超参,经 INIT 下发
 | 批次 | 内容 | 状态/动作 |
 |---|---|---|
 | A | **收口+重构**:补 `protocol/data` 缺失包 → 核心去算法化(module 常量化移除、registry 命名空间、§4 schema 信封)→ `modules/` 迁 `plugins/`(pipe.slam、nav2d 两个插件包 + 各自 contract.md)→ body 机制 → 契约 v1.1 评审冻结 | 本版启动 |
-| B | nav 闭环验证;manip 插件(作为"新建插件流程"首个验证);暂停/单步 | 待做 |
-| C | device action 下发回路(RealWorld 双向);body↔device 契约对齐;三源一致 | 待做 |
-| D | Hub 对接(§11 修订后);baseline 接入 CI | 待做 |
+| B | nav 闭环验证;manip 插件(作为"新建插件流程"首个验证);暂停/单步 | **已完成**(nav2d/manip.force/ctrl.invp 三闭环插件收口,RunControl 暂停/单步,140+ 测试全绿;见推进计划批次 B) |
+| C | device action 下发回路(RealWorld 双向);body↔device 契约对齐;三源一致 | 待做(需 device 契约侧配合,不阻塞打通) |
+| D | Hub 对接(§11 修订后);baseline 接入 CI | 进行中(部署工程化 R5/R6 已落地;baseline 入 CI 待 Hub 蓝本协同) |
 | E | suite 联合测试;enc=pb + .proto(C++ 接入前) | 方向性 |
 
 ---
