@@ -99,6 +99,33 @@
     + 功能 3(开环实时复现 + 闭环进程内 + 服务通路含错误分支),pytest 140 全绿;
     CLI 实跑冒烟(run→pause 冻结→step +5 精确→resume→passed)通过;**批次 B 收口**
 
+### 批次 D · 部署工程化 + 真实算法仓联调(2026-08-23 立项)
+
+> 批次 B 收口后按 §4.1 既定路线推进;含 PMS 建议 A1/A3/A4 与批次 D 排期。
+
+- [x] **M-D0 tzcomm 部署归位**:daemon 部署完全交 TzComm 工程——`install/setup.sh`
+  (central/node/reconfigure/status/uninstall)+ unit 模板去硬编码 + EnvironmentFile
+  单一事实源,于 TzComm 仓提交(6853ead)并系统级安装(`/etc/systemd/system/tzcomm-daemon.service`,
+  127.0.0.1:17888);本仓不再持有 tzcomm unit
+- [x] **M-D1 部署工程化(R5/R6 落地)**:
+  - R5 定案(A4):runner 机 `pip install --user -e`(发行包名 **tz_atp**,import 名 autotest 不变)
+  - HTTP 运维面 `server/http.py`(FastAPI,:2335;/health /api/submit /api/command /api/jobs/{id},
+    与 tzcomm 面共享 Jobs 池;不参与 Hub 触发链路,v1.3 §2/§4.3 不变)
+  - `deploy/autotest.service` 用户级常驻(2333=PMS/2334=cicd-hub 先例;daemon 未就绪靠
+    Restart=on-failure 追上)
+  - **验收**:8 单测(TestClient)+ pytest 148 全绿;冒烟 `curl /health` ✓、HTTP submit
+    倒立摆 passed ✓、`client run` 2/2 passed ✓(systemd 实服务)
+- [x] **M-D2 cicd_test 倒立摆接入(真实算法仓)**:`cicd_test@feat/invp-pd`(aadb1ac)——
+  根 manifest `scenario.yaml` + `invp_sut.py`(PD)+ `scenarios/sim_basic.yaml` +
+  `ci/report.py` + workflow 真实执行版(client run --json + 回调);
+  本地等效 E2E(clone→评测→mock Hub 回调载荷校验)通过
+- [ ] **M-D3 baseline 接入 CI(PMS 建议 A2,排期批次 D 后半)**:`report --save-baseline`
+  进蓝本 workflow;蓝本归 Hub 仓,ATP 出改动需求/PR,Hub 合并分发;baseline 入 CI 后
+  vs_baseline 才有真实消费者
+- [ ] **M-D4 真实算法仓通路1 联调(终极验收,PMS 建议 A5)**:依赖 R4(runner 注册,人工);
+  cicd_test pytest 探针已实证回调链路,真实 autotest(tzcomm+SUT)在 runner 上未跑过,
+  与 M-D3 一并排期
+
 ### Phase H1 · Hub MVP:通路1 主链路(**cicd-hub 工程,同事主导**)
 > 进度以同事仓《docs/阶段计划-双通路端到端联调.md》为准(软链 `__temp__/cicd_hub`,同步开发中,代码常变)。
 > 已知:S0 公网入口 ✅;**T1a 真实 push E2E ✅(2026-08-20,cicd_test + 云端 runner,回调链路已真实验证)**;T0 字段对齐/T1b-d 进行中。
