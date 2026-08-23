@@ -73,11 +73,13 @@ def run(manifest: str, scenario: str | None = None, clock_rate: float | None = N
         as_json: bool = False) -> int:
     node = tzcomm.Node("autotest-client")
     try:
-        request = {"manifest": manifest}
+        # 路径以 client 侧 cwd 为基准解析为绝对路径：Service 是独立进程（systemd），
+        # 其 cwd 与 client 不同（runner 上 workflow 从算法仓 checkout 目录执行）
+        request = {"manifest": str(Path(manifest).resolve())}
         if clock_rate is not None:  # 未指定则省略，由 Service 用默认 1.0（实时复现）
             request["clock_rate"] = clock_rate
         if scenario:
-            request["scenario"] = scenario
+            request["scenario"] = str(Path(scenario).resolve())
         state = _submit_and_wait(node, request)
     finally:
         node.close()
@@ -99,24 +101,30 @@ def run(manifest: str, scenario: str | None = None, clock_rate: float | None = N
 
 
 def matrix(matrix_path: str, as_json: bool = False) -> int:
-    data = yaml.safe_load(Path(matrix_path).read_text(encoding="utf-8"))
+    matrix_file = Path(matrix_path).resolve()
+    data = yaml.safe_load(matrix_file.read_text(encoding="utf-8"))
     entries = data.get("algorithms") or []
     if not entries:
         print("test_matrix.yaml 缺少 algorithms 列表", file=sys.stderr)
         return 2
+
+    def _abs(p: str) -> str:
+        # 相对路径以矩阵文件所在目录为基准（Service 为独立进程，cwd 不可依赖）
+        q = Path(p)
+        return str(q if q.is_absolute() else (matrix_file.parent / q).resolve())
 
     default_clock_rate = data.get("clock_rate")
     aggregate: list[dict] = []
     node = tzcomm.Node("autotest-matrix")
     try:
         for entry in entries:
-            request = {"manifest": entry["manifest"]}
+            request = {"manifest": _abs(entry["manifest"])}
             rate = entry.get("clock_rate", default_clock_rate)
             if rate is not None:  # 未指定则省略，由 Service 用默认 1.0（实时复现）
                 request["clock_rate"] = rate
             for key in ("scenario", "checker", "checker_config"):
                 if entry.get(key):
-                    request[key] = entry[key]
+                    request[key] = _abs(entry[key]) if key == "scenario" else entry[key]
             state = _submit_and_wait(node, request)
             aggregate.append({"manifest": entry["manifest"], **state})
     finally:
