@@ -1,10 +1,10 @@
 # Patrol Box · 三平台打通推进计划(v1 · 2026-08-19)
 
-> **基准契约**:《三平台通信与接口总契约 **v1.4**》(2026-08-23 M 批准生效,最高基准)、《Autotest Service 接口契约 v1.1》、《Hub 技术路径规划》。
-> v1.4 关键增量:§4.4 事件枚举补 `pr_merged`(W1 勾销)、§4.5 新增 `/pms/repo-projects`+`/pms/lookup`+`/pms/members`、
-> §4.5b `/hub/repo-refs` 入档 + Hub 读端点缓存语义;**人操作认证改飞书 OAuth 登录**(Hub C3a 已落地,
-> service-token 仅留机器间凭证,轮换策略拍板"泄露时人工更换、定期不轮换")。
-> **目标**:三平台(PMS / cicd-hub / Autotest)全链路打通,v1.3 §3 **四条通路**端到端可测。
+> **基准契约**:《三平台通信与接口总契约 **v1.5**》(2026-08-24 M 批准生效,最高基准;**唯一事实源在 PMS 仓 `schema/`**,本仓不留副本)、《Autotest Service 接口契约 v1.1》、《Hub 技术路径规划》。
+> v1.5 关键增量:**通路1/3 的 autotest 执行载体由 workflow_dispatch 切换为 Hub 直连 ATP HTTP 面**(§4.8)——
+> self-hosted Runner 从评测通路移除(R4 勾销);ATP 评测完成主动回调 Hub(报文不变);Hub 归位后 check-runs
+> 回写 PR 可见性;多 ATP 池化(repo↔ATP 一对多路由归 Hub 配置);service-token 轮换拍板勾销(飞书 OAuth)。
+> **目标**:三平台(PMS / cicd-hub / Autotest)全链路打通,v1.5 §3 **四条通路**端到端可测。
 > 前期不求功能全面,但架构、解耦性、模块扩展性必须清晰;扩展性在打通后补齐。
 > 本文档为任务追踪事实源:状态列随开发更新,调整走 §6 变更记录。
 
@@ -14,7 +14,7 @@
 |---|---|---|
 | D1 | 打通范围 | v1.3 §3 **四条通路全部**打通(非两条) |
 | D2 | D4 中继 | **废弃**。PMS 全部按 v1.3 新协议改造,不留中间版本;协作事件一律走 §4.4 events。**遗留**:PR merged→交付物冻结 无事件载体 → 待决 W1 |
-| D3 | autotest 分支 push 触发 | **废弃**。一切触发经 Hub `workflow_dispatch`(必带 cid);workflow `on` 只留 `workflow_dispatch`(mannultest 分支仅作代码载体,不自动触发,防绕过 cid) |
+| D3 | autotest 分支 push 触发 | **废弃**。一切触发经 Hub(必带 cid);~~workflow `on` 只留 `workflow_dispatch`~~(**v1.5 更新**:autotest 执行载体改 Hub 直连 ATP HTTP 面,GHA workflow 降级为算法仓自测备选路径);mannultest 分支仅作代码载体,不自动触发,防绕过 cid |
 | D4 | Hub 工程 | 新 repo `tz-Box/cicd-hub`(简称 hub),废弃 tz_cms 命名 |
 | D5 | manip 模块 | **删除**;v1.1 批次 B 按"新建插件流程"重建,作为新流程首个验证 |
 
@@ -113,7 +113,7 @@
 - [x] **M-D1 部署工程化(R5/R6 落地)**:
   - R5 定案(A4):runner 机 `pip install --user -e`(发行包名 **tz_atp**,import 名 autotest 不变)
   - HTTP 运维面 `server/http.py`(FastAPI,:2335;/health /api/submit /api/command /api/jobs/{id},
-    与 tzcomm 面共享 Jobs 池;不参与 Hub 触发链路,v1.3 §2/§4.3 不变)
+    与 tzcomm 面共享 Jobs 池;**v1.5 升级注记**:该 HTTP 面正是批次 E 直连通路的承载面,§4.8 端点在其上扩展)
   - `deploy/autotest.service` 用户级常驻(2333=PMS/2334=cicd-hub 先例;daemon 未就绪靠
     Restart=on-failure 追上)
   - **验收**:8 单测(TestClient)+ pytest 148 全绿;冒烟 `curl /health` ✓、HTTP submit
@@ -136,14 +136,30 @@
     =评测机 Service 产物目录);③ Callback step 改 `python3 ci/report.py report.json
     regression.json`;④ 算法仓新增变量 `AUTOTEST_ARTIFACTS_DIR`(随 R5 部署文档)
   - 验收:pytest 158 全绿(+7 新增:CLI 4 + ci/report.py 3)
-- [ ] **M-D4 真实算法仓通路1 联调(终极验收,PMS 建议 A5)**:依赖 R4(runner 注册,人工);
-  cicd_test pytest 探针已实证回调链路,真实 autotest(tzcomm+SUT)在 runner 上未跑过,
-  与 M-D3 一并排期
-  - **ATP 就绪公告(2026-08-24 转发 Hub/PMS)**:ATP 侧全部就绪——M-D0~M-D3 完成,
-    真实执行版 workflow 已在 cicd_test(2145ec8)本地等效 E2E 两轮验证(无基线全 new →
-    vs_baseline: improved=2);Hub 阶段计划 N3 表「ATP self-hosted runner 对接 | 等 ATP 就绪」可解除
-  - 联调可与 Hub **N1b 联合 E2E 合并**(cicd_test 同一 PR 生命周期:synchronize→approve→merge,
-    一次覆盖 T1d/T2b/T2d 复验 + 通路1 真实 autotest 首跑)
+- [ ] ~~M-D4 真实算法仓通路1 联调(runner 形态)~~ **随 v1.5 改道,见批次 E**——
+  2026-08-24 M 拍板路径 A(Hub 直连 ATP):runner 依赖取消,原"runner 注册→GHA 派单→真评测首跑"
+  联调形态废止;已完成的 M-D2/D3 资产(cicd_test manifest/SUT/基线机制)全部保留复用
+
+### 批次 E · v1.5 直连改造(2026-08-24 立项,M 拍板路径 A)
+
+> 通路1/3 执行载体切换为 Hub 直连 ATP HTTP 面(契约 §4.8)。ATP 侧(本仓)任务如下;
+> Hub/PMS 侧任务见 §6 三平台推进规划(2026-08-24 条目)。
+
+- [ ] **M-E1 submit 接口**:`POST /atp/evaluations`(server/http.py 扩展)——Bearer `atp.service_token`
+  校验;接收 cid/repo/ref/sha?/scenario?/save_baseline/pms_task_id?;同 cid 幂等(返原 job_id);
+  校验失败 4xx(Hub 直接判 failure);响应 202 {job_id, sha}
+- [ ] **M-E2 workspace 与 checkout**:按 repo 缓存 git 仓、按 ref/sha worktree 隔离到本机 workspace;
+  GitHub 只读凭证(deploy key,部署细节);checkout 后按 manifest 装配(复用 server.submit 业务路径)
+- [ ] **M-E3 主动回调 Hub**:评测完成(含失败)自动 POST `hub.callback_url`(`/api/ci/callback`,
+  Bearer `hub.callback_token`;summary 生成内化现 ci/report.py 逻辑含 vs_baseline;带实际 sha +
+  finished_at);静态配置入 systemd Environment;回调失败重试 + 记 session.log
+- [ ] **M-E4 状态查询与探活**:`GET /atp/evaluations/{job_id}`(running/success/failure + report,
+  Hub 轮询兜底);`GET /atp/health` 补 tzcomm 自检与队列深度(现 /health 升级)
+- [ ] **M-E5 单 ATP 串行语义**:评测机资源独占,server 内排队(契约 §4.8 并发语义)
+- [ ] **M-E6 联调(Hub 调度模块就绪后)**:cicd_test 真实 push → Hub 编排 → 直连 ATP → 倒立摆评测 →
+  回调归位 → check-runs 回写 PR → PMS 落卡 + 飞书;**可与 Hub N1b 联合 E2E 合并**(同一 PR 生命周期)
+- [ ] **M-E7 文档**:部署文档补 deploy key/workspace/atp.service_token/hub.callback_* 配置;
+  《算法测试接入手册》CI 章节改直连版(GHA workflow 标注为自测备选);契约 §14 纪律回写
 
 ### Phase H1 · Hub MVP:通路1 主链路(**cicd-hub 工程,同事主导**)
 > 进度以同事仓《docs/阶段计划-双通路端到端联调.md》为准(软链 `__temp__/cicd_hub`,同步开发中,代码常变)。
@@ -181,7 +197,7 @@ H1 ─▶ H2 ─▶ H3 ─┘
 
 | 通路 | Autotest 侧 | 就绪度 | 阻塞项 / 依赖 |
 |---|---|---|---|
-| **通路1**(自动闭环) | A2 已完成(workflow 模板 + 回调脚本,v1.3 全字段) | **待联调** | ① self-hosted runner 注册到评测机(**人工操作**,R4);② 被测算法仓库(manifest + workflow + scenario,可用 examples/slam_algo 打模板);③ 评测机常驻 autotest server + tzcomm daemon(R5/R6);④ Hub 侧 T0/T1(同事推进中,cicd_test 链路已实证) |
+| **通路1**(自动闭环) | A2 已完成;M-D1 HTTP 面已就位(:2335);**v1.5:批次 E 直连改造待做(M-E1~M-E5)** | **待批次 E + 联调** | ① ATP 批次 E(本仓,M-E1~M-E5);② Hub autotest 调度模块 + ATP 池配置(同事侧,契约 §8.2);③ GitHub App 补 Checks:write(check-runs 回写,§4.3c);④ PMS 端点已齐(v0.27.x) |
 | **通路3**(手动预提交) | workflow 已支持 `mannultest/**` 触发约定 | 等 Hub | Hub T4 `POST /hub/manual-check` 端点(同事侧) |
 | **通路2**(事件通知) | 无动作(Autotest 不感知) | 等 Hub/PMS | Hub T2 + PMS `/pms/events` |
 | **通路4**(交付物查询) | 无动作 | 等 Hub/PMS | Hub T3 + PMS 本地 cid 表 |
@@ -196,7 +212,7 @@ H1 ─▶ H2 ─▶ H3 ─┘
 | W1 | ~~PR merged→交付物冻结 事件载体~~ | **已勾销(2026-08-23)**:契约 v1.4 §4.4 新增 `pr_merged` type(M 批准);PMS v0.26 已实现端点、Hub 2026-08-24 完成翻译切变(N1a),联合 E2E 随 Hub N1b |
 | R2 | PMS 端点排期 | 同团队并行;Hub 侧 outbox mock 兜底不阻塞 |
 | R3 | A1 迁移影响面 26 文件 | 协议变化需同步改示例 SUT;测试跟随,一轮迁移到位 |
-| R4 | GitHub App 注册 / runner 注册 | App 已完成(Hub 侧在用);**self-hosted runner 注册到 tz-Box 组织仍待人工**——M-D4 唯一硬阻塞 |
+| R4 | ~~GitHub App 注册 / runner 注册~~ | **已勾销(2026-08-24,v1.5)**:App 已完成(Hub 侧在用);runner 从评测通路移除(路径 A 拍板),注册动作取消;GitHub App 仅需补 Checks:write(check-runs 回写) |
 | R5 | runner 上 autotest 包安装 | **已定案(2026-08-23)**:`pip install --user -e`,发行包名 tz_atp;已写入部署文档 |
 | R6 | tzcomm daemon + Redis 常驻 | **已完成(M-D0/M-D1)**:tzcomm-daemon 系统级 + autotest.service 用户级(:2335) |
 | R7 | token 分发 | service-token / hub.callback_token / webhook secret 生成与三端配置 |
@@ -216,3 +232,4 @@ H1 ─▶ H2 ─▶ H3 ─┘
 | 2026-08-21 | **M-B2 完成(D5 收口)**:manip.force 插件按新建插件流程重建(单自由度接触力控,与 invp 镇定/nav2d 到点正交的第三类任务);<br>目标力经 obs 下发新范式(target_force 对齐 nav2d goal 先例);1kHz 闭环双侧 10000/10000 零丢包;<br>pytest 131 全绿;批次 B 插件矩阵成型(3 闭环插件 + 1 开环插件) | 完成,继续 M-B3(暂停/单步) |
 | 2026-08-21 | **M-B3 完成,批次 B 收口**:RunControl 帧级闸门(pause 冻结/step 配额放行/resume 清残余),开环 Loader + 闭环 ClosedLoopSession 统一挂载;<br>server 调试命令分支 + job status 暴露 run_state/frames;client pause/step/resume 子命令 + run 打印 job_id;<br>手册补 §4.2 暂停/单步(顺带修 §3 陈旧引用);pytest 140 全绿(单元 6 + 功能 3) | 完成,**v1.1 批次 B 全部收口**;后续视算法实操反馈排新批次 |
 | 2026-08-24 | **基准契约升 v1.4(M 批准)**:W1 勾销(pr_merged 入 §4.4,PMS/Hub 双侧已实现);<br>人操作认证拍板改飞书 OAuth(Hub C3a 已落地,service-token 仅机器间凭证,轮换=泄露时人工更换);<br>R5 定案 pip install --user -e(tz_atp);ATP 就绪公告转发 Hub/PMS,M-D4 待 R4 runner 人工注册 | 执行中,等 R4 后启动 M-D4(可与 Hub N1b 合并) |
+| 2026-08-24 | **基准契约升 v1.5(M 批准路径 A:Hub 直连 ATP)**:契约就地升级(PMS 仓 schema/,唯一事实源,本仓 v1.3 副本删除);<br>**R4 勾销**(runner 从评测通路移除);M-D4 改道为**批次 E**(M-E1 submit/M-E2 workspace+checkout/M-E3 主动回调/M-E4 状态查询+探活/M-E5 串行/M-E6 联调/M-E7 文档);<br>D3 注记更新:workflow_dispatch 对 autotest 废止,GHA workflow 降级自测备选;<br>**三平台推进规划(v1.5)**:<br>· ATP(本仓):批次 E 七项,先行开工 M-E1~M-E5,Hub 就绪后 M-E6 联调;<br>· Hub(同事):① autotest 调度模块(repo↔ATP 一对多路由 + §4.8 submit + 排队);② ATP 池管理(/atp/health 探活 + ci_alert);③ 轮询兜底(GET /atp/evaluations/{job_id})+ 超时语义调整;④ check-runs 回写(App 补 Checks:write,§4.3c);⑤ /hub/manual-check 改走 §4.8;⑥ N3 表 runner 对接项随 v1.5 废止;<br>· PMS(同事):**零改动**(报文不变;run_url 语义改指 Hub console,透传无感);<br>· 联调:M-E6 与 Hub N1b 合并,cicd_test 同一 PR 生命周期全覆盖 | 已批准,批次 E 开工 |

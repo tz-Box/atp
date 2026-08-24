@@ -1,14 +1,17 @@
 # Autotest 评测 CI/CD 模板（放到算法仓库 .github/workflows/autotest.yml）
 #
-# 行为（v1.3 §4.3 通路1/通路3）：
-#   - 仅由 Hub 经 workflow_dispatch 触发（inputs: correlation_id/check_type/commit）；
+# 【定位：GHA 备选/自测路径】总契约 v1.5 起，评测主通路为 Hub 直连 ATP HTTP 面
+# （§4.8），不经 GitHub Actions；本模板保留供算法仓在 GHA 内自测/冒烟使用。
+#
+# 行为（契约 §4.3b 非主路径）：
+#   - 由 workflow_dispatch 触发（inputs: correlation_id/check_type/commit）；
 #   - runner 上 `client run --json` 评测，随后 `client report --json` 与历史基线
 #     做回归对比（M-D3；save_baseline=true 时先把本次结果存为新基线，供主干/发版
 #     评测滚动更新基线）；
 #   - 末步回调 Hub /api/ci/callback（Bearer 鉴权，携带实际 checkout 的 sha +
 #     conclusion + report{summary 含 vs_baseline, run_url} + finished_at）。
 #
-# 前提（详见 docs/scheme/PatrolBox-三平台通信与接口总契约v1.3.md §4.3）：
+# 前提（详见《PatrolBox-三平台通信与接口总契约 v1.5》§4.3，唯一事实源在 PMS 仓 schema/）：
 #   1) 仓库根目录有 scenario.yaml（manifest：launch/consumes/scenario/image 等）；
 #   2) runner 是 self-hosted（内网，能访问 Autotest Service 与 tzcomm daemon）；
 #   3) 评测服务已部署（常驻），按 manifest.image 用 docker+bind 拉起算法；
