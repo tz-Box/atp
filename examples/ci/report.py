@@ -1,6 +1,9 @@
 """CI 回调：评测结果 → Hub `POST /api/ci/callback`（v1.3 §4.3）。
 
-纯标准库，无第三方依赖。用法：python3 report.py <report.json>
+纯标准库，无第三方依赖。用法：python3 report.py <report.json> [regression.json]
+  report.json     client run --json 输出（必带）
+  regression.json client report <job_id> --json 输出（可选，M-D3 回归对比；
+                  携带时摘要追加 vs_baseline 变化计数，回归有了真实消费者）
 
 环境变量（workflow 传入）：
   HUB_CALLBACK_URL   Hub 回调端点（.../api/ci/callback）
@@ -27,7 +30,7 @@ def load_report(path: str) -> dict:
         return json.load(fh)
 
 
-def summarize(report: dict) -> str:
+def summarize(report: dict, regression: dict | None = None) -> str:
     """report.json → 结构化摘要文本（passed/n_records/metrics 概览，v1.3 §4.3）。"""
     if not report.get("ok"):
         return f"评测失败: {report.get('error', '未知错误')}"
@@ -45,10 +48,14 @@ def summarize(report: dict) -> str:
     warnings = (report.get("comm_health") or {}).get("warnings") or []
     if warnings:
         parts.append("通信告警: " + "; ".join(warnings))
+    # 回归对比（M-D3）：vs_baseline 变化计数（regressed 为回归，需关注）
+    changes = (regression or {}).get("changes") or {}
+    if changes:
+        parts.append("vs_baseline: " + ", ".join(f"{k}={v}" for k, v in sorted(changes.items())))
     return "; ".join([head, *parts])
 
 
-def build_payload(report: dict, env: dict) -> dict:
+def build_payload(report: dict, env: dict, regression: dict | None = None) -> dict:
     """组回调载荷（v1.3 §4.3）：cid + 实际 sha + check_type + conclusion + report + finished_at。"""
     conclusion = "failure"
     if report.get("ok") and all(r.get("passed") is not False for r in report.get("results", [])):
@@ -58,7 +65,7 @@ def build_payload(report: dict, env: dict) -> dict:
         "sha": env["sha"],
         "check_type": env.get("check_type") or "autotest",
         "conclusion": conclusion,
-        "report": {"summary": summarize(report)},
+        "report": {"summary": summarize(report, regression)},
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
     if env.get("run_url"):
@@ -77,7 +84,7 @@ def post_callback(url: str, token: str, payload: dict) -> dict:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("用法: python3 report.py <report.json>", file=sys.stderr)
+        print("用法: python3 report.py <report.json> [regression.json]", file=sys.stderr)
         return 2
     env = {
         "url": os.environ.get("HUB_CALLBACK_URL", ""),
@@ -99,7 +106,13 @@ def main() -> int:
     except (OSError, json.JSONDecodeError) as exc:
         # 评测进程异常（未产出合法 report.json）也要把 failure 回传 Hub，避免 pending 超时
         report = {"ok": False, "error": f"report.json 读取失败: {exc}"}
-    payload = build_payload(report, env)
+    regression = None
+    if len(sys.argv) > 2:
+        try:
+            regression = load_report(sys.argv[2])
+        except (OSError, json.JSONDecodeError):
+            regression = None  # 回归产物缺失/非法不阻塞主回调
+    payload = build_payload(report, env, regression)
     try:
         resp = post_callback(env["url"], env["token"], payload)
     except urllib.error.URLError as exc:

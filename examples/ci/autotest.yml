@@ -2,14 +2,19 @@
 #
 # 行为（v1.3 §4.3 通路1/通路3）：
 #   - 仅由 Hub 经 workflow_dispatch 触发（inputs: correlation_id/check_type/commit）；
-#   - runner 上 `client run --json` 评测，末步回调 Hub /api/ci/callback（Bearer 鉴权，
-#     携带实际 checkout 的 sha + conclusion + report{summary, run_url} + finished_at）。
+#   - runner 上 `client run --json` 评测，随后 `client report --json` 与历史基线
+#     做回归对比（M-D3；save_baseline=true 时先把本次结果存为新基线，供主干/发版
+#     评测滚动更新基线）；
+#   - 末步回调 Hub /api/ci/callback（Bearer 鉴权，携带实际 checkout 的 sha +
+#     conclusion + report{summary 含 vs_baseline, run_url} + finished_at）。
 #
 # 前提（详见 docs/scheme/PatrolBox-三平台通信与接口总契约v1.3.md §4.3）：
 #   1) 仓库根目录有 scenario.yaml（manifest：launch/consumes/scenario/image 等）；
 #   2) runner 是 self-hosted（内网，能访问 Autotest Service 与 tzcomm daemon）；
 #   3) 评测服务已部署（常驻），按 manifest.image 用 docker+bind 拉起算法；
-#   4) Secret `HUB_CALLBACK_TOKEN`（hub.callback_token）+ 变量 `HUB_CALLBACK_URL` 已配置。
+#   4) Secret `HUB_CALLBACK_TOKEN`（hub.callback_token）+ 变量 `HUB_CALLBACK_URL` 已配置；
+#   5) 变量 `AUTOTEST_ARTIFACTS_DIR` = 评测机 Service 产物目录（baseline.json 所在处，
+#      回归对比与基线滚动都落在该目录，随 Service 常驻持久化）。
 name: Autotest Evaluation
 
 on:
@@ -25,6 +30,11 @@ on:
       commit:
         description: "待评测的 commit sha"
         required: true
+      save_baseline:
+        description: "评测后将结果存为新基线（主干/发版评测滚动基线用）"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   evaluate:
@@ -45,9 +55,25 @@ jobs:
         run: |
           python3 -m autotest.client run scenario.yaml --clock-rate 1.0 --json > report.json || true
 
+      - name: Regression vs baseline
+        # M-D3：与 Service 产物目录中的 baseline.json 对比（无基线则全部标 new）；
+        # save_baseline=true 时先把本次结果滚为新基线（对比仍基于旧基线，先对比后滚动）
+        if: always()
+        env:
+          AUTOTEST_ARTIFACTS_DIR: ${{ vars.AUTOTEST_ARTIFACTS_DIR }}
+          SAVE_BASELINE: ${{ inputs.save_baseline }}
+        run: |
+          JOB_ID=$(python3 -c "import json; print(json.load(open('report.json')).get('job_id') or '')" 2>/dev/null || true)
+          if [ -n "$JOB_ID" ]; then
+            python3 -m autotest.client report "$JOB_ID" --json > regression.json || true
+            if [ "$SAVE_BASELINE" = "true" ]; then
+              python3 -m autotest.client report "$JOB_ID" --save-baseline || true
+            fi
+          fi
+
       - name: Callback Hub
         if: always()
-        run: python3 ci/report.py report.json
+        run: python3 ci/report.py report.json regression.json
         env:
           HUB_CALLBACK_URL: ${{ vars.HUB_CALLBACK_URL }}
           HUB_CALLBACK_TOKEN: ${{ secrets.HUB_CALLBACK_TOKEN }}

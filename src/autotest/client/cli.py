@@ -89,6 +89,8 @@ def run(manifest: str, scenario: str | None = None, clock_rate: float | None = N
     if as_json:
         print(json.dumps({
             "ok": True,
+            # job_id 供后续 step 定位 Service 侧产物（report 回归对比 / 调试命令）
+            "job_id": state.get("job_id"),
             "results": state.get("results", []),
             "comm_health": state.get("comm_health"),
         }, ensure_ascii=False))
@@ -168,7 +170,8 @@ def debug_command(command: str, job_id: str, n: int = 1, as_json: bool = False) 
     return 0
 
 
-def report(job_id: str, baseline: str | None = None, save: bool = False) -> int:
+def report(job_id: str, baseline: str | None = None, save: bool = False,
+           as_json: bool = False) -> int:
     artifacts_dir = Path(os.environ.get("AUTOTEST_ARTIFACTS_DIR", "artifacts"))
     report_dir = artifacts_dir / job_id
     report_path = report_dir / "report.json"
@@ -188,7 +191,19 @@ def report(job_id: str, baseline: str | None = None, save: bool = False) -> int:
         {"testcase_id": r["testcase_id"], "current": r, "change": "new"}
         for r in current.get("results", [])
     ]
-    print(render_markdown(current, rows))
+    if as_json:
+        # 机读对比结果（CI 用）：changes 计数供回调摘要携带 vs_baseline
+        changes: dict[str, int] = {}
+        for row in rows:
+            changes[row["change"]] = changes.get(row["change"], 0) + 1
+        print(json.dumps({
+            "job_id": current.get("job_id", job_id),
+            "has_baseline": old is not None,
+            "changes": changes,
+            "rows": rows,
+        }, ensure_ascii=False))
+    else:
+        print(render_markdown(current, rows))
     return 0
 
 
@@ -210,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     report_parser.add_argument("job_id", help="评测 job_id（对应 artifacts/{job_id}/report.json）")
     report_parser.add_argument("--baseline", default=None, help="基线 report.json 路径（默认 artifacts/baseline.json）")
     report_parser.add_argument("--save-baseline", action="store_true", help="把该次评测保存为基线")
+    report_parser.add_argument("--json", action="store_true", help="以 JSON 输出机读对比结果（CI 用）")
 
     pause_parser = sub.add_parser("pause", help="暂停喂帧（调试：世界冻结，SUT 安全等待）")
     pause_parser.add_argument("job_id", help="评测 job_id")
@@ -231,7 +247,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "matrix":
         return matrix(args.matrix, as_json=args.json)
     if args.cmd == "report":
-        return report(args.job_id, baseline=args.baseline, save=args.save_baseline)
+        return report(args.job_id, baseline=args.baseline, save=args.save_baseline,
+                      as_json=args.json)
     if args.cmd == "pause":
         return debug_command("pause", args.job_id, as_json=args.json)
     if args.cmd == "step":

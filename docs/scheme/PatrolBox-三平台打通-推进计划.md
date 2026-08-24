@@ -119,9 +119,20 @@
   根 manifest `scenario.yaml` + `invp_sut.py`(PD)+ `scenarios/sim_basic.yaml` +
   `ci/report.py` + workflow 真实执行版(client run --json + 回调);
   本地等效 E2E(clone→评测→mock Hub 回调载荷校验)通过
-- [ ] **M-D3 baseline 接入 CI(PMS 建议 A2,排期批次 D 后半)**:`report --save-baseline`
-  进蓝本 workflow;蓝本归 Hub 仓,ATP 出改动需求/PR,Hub 合并分发;baseline 入 CI 后
-  vs_baseline 才有真实消费者
+- [x] **M-D3 baseline 接入 CI(PMS 建议 A2)**(2026-08-23):
+  - ATP 侧(本仓):`run --json` 输出携带 job_id(供后续 step 定位 Service 侧产物);
+    `report --json` 机读回归对比(has_baseline/changes 计数/rows);CI 模板
+    `examples/ci/autotest.yml` 增 "Regression vs baseline" step + `save_baseline`
+    input(先对比后滚动);`examples/ci/report.py` 支持第二参 regression.json,
+    回调摘要追加 vs_baseline 变化计数
+  - cicd_test 同步(2145ec8):workflow + ci/report.py 同源更新;本地等效 E2E 两轮——
+    首轮无基线全 new 并落 baseline.json,次轮 vs_baseline: improved=2,回调摘要携带
+  - **给 Hub 的蓝本改动需求(workflows/autotest.yml,建议照 cicd_test 现行版合并分发)**:
+    ① 新增 workflow_dispatch input `save_baseline`(bool 默认 false;主干/发版评测置 true);
+    ② Run evaluation 后插 "Regression vs baseline" step(env `vars.AUTOTEST_ARTIFACTS_DIR`
+    =评测机 Service 产物目录);③ Callback step 改 `python3 ci/report.py report.json
+    regression.json`;④ 算法仓新增变量 `AUTOTEST_ARTIFACTS_DIR`(随 R5 部署文档)
+  - 验收:pytest 158 全绿(+7 新增:CLI 4 + ci/report.py 3)
 - [ ] **M-D4 真实算法仓通路1 联调(终极验收,PMS 建议 A5)**:依赖 R4(runner 注册,人工);
   cicd_test pytest 探针已实证回调链路,真实 autotest(tzcomm+SUT)在 runner 上未跑过,
   与 M-D3 一并排期

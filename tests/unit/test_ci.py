@@ -129,6 +129,22 @@ def test_summarize_no_warnings_when_comm_absent() -> None:
     assert "通信告警" not in summary
 
 
+def test_summarize_appends_vs_baseline() -> None:
+    """M-D3：携带 regression.json 时摘要尾部追加 vs_baseline 变化计数。"""
+    report = {"ok": True, "results": [
+        {"testcase_id": "tc0", "passed": True, "metrics": {"ate_rmse": 0.0012}}]}
+    regression = {"has_baseline": True, "changes": {"improved": 1, "regressed": 2}, "rows": []}
+    summary = ci_report.summarize(report, regression)
+    assert summary.startswith("1/1 passed")
+    assert "vs_baseline: improved=1, regressed=2" in summary  # 按 key 排序
+
+
+def test_summarize_vs_baseline_absent_without_regression() -> None:
+    report = {"ok": True, "results": []}
+    assert "vs_baseline" not in ci_report.summarize(report)
+    assert "vs_baseline" not in ci_report.summarize(report, {"changes": {}})
+
+
 # ---- report：回调载荷（v1.3 §4.3） ----
 _ENV = {"correlation_id": "chk_01JABC", "sha": "abc1234567", "check_type": "autotest",
         "run_url": "https://github.com/o/r/actions/runs/1"}
@@ -210,6 +226,40 @@ def test_post_callback_against_mock_server(tmp_path, monkeypatch) -> None:
         assert body["conclusion"] == "success"
         assert set(body["report"]) == {"summary"}  # 无 RUN_URL 时 run_url 缺省
         datetime.fromisoformat(body["finished_at"])
+    finally:
+        server.shutdown()
+
+
+def test_main_with_regression_json_appends_vs_baseline(tmp_path, monkeypatch) -> None:
+    """M-D3：第二参 regression.json 存在时回调摘要携带 vs_baseline；缺失时不阻塞。"""
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/api/ci/callback"
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(
+            {"ok": True, "results": [{"testcase_id": "tc0", "passed": True,
+                                      "metrics": {"ate_rmse": 0.0012}}]}
+        ), encoding="utf-8")
+        regression_path = tmp_path / "regression.json"
+        regression_path.write_text(json.dumps(
+            {"has_baseline": True, "changes": {"new": 1}, "rows": []}
+        ), encoding="utf-8")
+        monkeypatch.setenv("HUB_CALLBACK_URL", url)
+        monkeypatch.setenv("HUB_CALLBACK_TOKEN", "tok-123")
+        monkeypatch.setenv("CORRELATION_ID", "chk_01JABC")
+        monkeypatch.setenv("ACTUAL_SHA", "abc1234567")
+
+        monkeypatch.setattr(sys, "argv",
+                            ["report.py", str(report_path), str(regression_path)])
+        assert ci_report.main() == 0
+        assert "vs_baseline: new=1" in _Handler.received["body"]["report"]["summary"]
+
+        # regression.json 缺失/非法：主回调不受影响，摘要不带 vs_baseline
+        monkeypatch.setattr(sys, "argv",
+                            ["report.py", str(report_path), str(tmp_path / "nope.json")])
+        assert ci_report.main() == 0
+        assert "vs_baseline" not in _Handler.received["body"]["report"]["summary"]
     finally:
         server.shutdown()
 

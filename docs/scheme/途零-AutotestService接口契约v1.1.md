@@ -281,7 +281,7 @@ hyperparams: {...}            # 算法超参,经 INIT 下发
 | A | **收口+重构**:补 `protocol/data` 缺失包 → 核心去算法化(module 常量化移除、registry 命名空间、§4 schema 信封)→ `modules/` 迁 `plugins/`(pipe.slam、nav2d 两个插件包 + 各自 contract.md)→ body 机制 → 契约 v1.1 评审冻结 | 本版启动 |
 | B | nav 闭环验证;manip 插件(作为"新建插件流程"首个验证);暂停/单步 | **已完成**(nav2d/manip.force/ctrl.invp 三闭环插件收口,RunControl 暂停/单步,140+ 测试全绿;见推进计划批次 B) |
 | C | device action 下发回路(RealWorld 双向);body↔device 契约对齐;三源一致 | 待做(需 device 契约侧配合,不阻塞打通) |
-| D | Hub 对接(§11 修订后);baseline 接入 CI | 进行中(部署工程化 R5/R6 已落地;baseline 入 CI 待 Hub 蓝本协同) |
+| D | Hub 对接(§11 修订后);baseline 接入 CI | 进行中(部署工程化 R5/R6 已落地;baseline 入 CI 的 ATP 侧已完成——`report --json`+`save_baseline`+回调摘要携带 vs_baseline,蓝本分发待 Hub 合并;见推进计划 M-D3) |
 | E | suite 联合测试;enc=pb + .proto(C++ 接入前) | 方向性 |
 
 ---
