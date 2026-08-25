@@ -128,27 +128,43 @@ def test_service_rejects_missing_manifest(daemon, tmp_path):
     assert "FileNotFoundError" in resp["error"]
 
 
-def test_service_parallel_jobs(daemon, tmp_path):
-    """会话池：两个 job 并发提交，互不阻塞，各自完成。"""
+def test_service_serial_queue(daemon, tmp_path):
+    """M-E5 串行语义（契约 §4.8）：并发提交 → FIFO 排队、单 worker 逐个执行。
+
+    手法：A 提交后立即 pause（帧闸门阻塞 worker），B 随后提交——
+    B 必须保持 queued 直到 A 恢复并完成；两 job 最终都成功。
+    """
     m1 = _write_manifest(tmp_path / "a")
     m2 = _write_manifest(tmp_path / "b")
     service = _start_service()
-
-    holder: dict = {}
-    threads = [
-        threading.Thread(target=lambda: holder.setdefault("j0", _submit(m1))),
-        threading.Thread(target=lambda: holder.setdefault("j1", _submit(m2))),
-    ]
     try:
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=120)
-        # 两个 job 都能拿到不同的 job_id 且各自完成
-        assert "j0" in holder and "j1" in holder
-        for resp in (holder["j0"], holder["j1"]):
-            assert not resp.get("error"), resp
-            assert len(resp["results"]) == 2
+        ra = service.submit({"manifest": m1, "clock_rate": 0})
+        assert not ra.get("error"), ra
+        ja = ra["job_id"]
+        service.command(ja, "pause")  # 帧闸门阻塞：worker 停在 A 内
+        # 等 worker 取出 A（started）并确认 A 在跑
+        deadline = time.monotonic() + 10
+        while service.job_status(ja)["status"] != "running" and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert service.job_status(ja)["status"] == "running"
+
+        rb = service.submit({"manifest": m2, "clock_rate": 0})
+        jb = rb["job_id"]
+        time.sleep(1.0)  # A 未放行间，B 不得开始（串行证明）
+        assert service.job_status(jb)["status"] == "queued"
+        assert service.queue_depth == 1
+
+        service.command(ja, "resume")
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if service.job_status(ja)["status"] == "done" and service.job_status(jb)["status"] == "done":
+                break
+            time.sleep(0.2)
+        for jid in (ja, jb):
+            state = service.job_status(jid)
+            assert state["status"] == "done" and not state["error"], state
+            assert len(state["results"]) == 2
+        assert service.queue_depth == 0
     finally:
         service.close()
 

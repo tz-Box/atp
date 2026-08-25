@@ -18,11 +18,15 @@ class Job:
     session_id: str
     clock_rate: Optional[float] = 1.0  # 1.0=实时复现原始帧率；>1 加速；0/None=全速
     done: threading.Event = field(default_factory=threading.Event)
+    started: threading.Event = field(default_factory=threading.Event)  # worker 取出后置位（M-E5 串行队列）
     results: list[dict] = field(default_factory=list)
     error: Optional[str] = None
     comm_health: dict = field(default_factory=dict)  # 通信健康（双侧丢包 + 告警），评测结束时采集
     control: RunControl = field(default_factory=RunControl)  # 调试闸门（暂停/单步），随 Job 创建
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # v1.5 §4.8（M-E1）：Hub 直连评测上下文（cid/repo/ref/sha/save_baseline/pms_task_id）；
+    # 非 None 时评测结束回写 EvaluationStore 终态并触发主动回调（M-E3）。tzcomm 面提交为 None。
+    eval_ctx: Optional[dict] = None
 
 
 def result_to_dict(result: Any) -> dict:

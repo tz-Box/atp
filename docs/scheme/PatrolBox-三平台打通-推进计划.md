@@ -140,15 +140,19 @@
   2026-08-24 M 拍板路径 A(Hub 直连 ATP):runner 依赖取消,原"runner 注册→GHA 派单→真评测首跑"
   联调形态废止;已完成的 M-D2/D3 资产(cicd_test manifest/SUT/基线机制)全部保留复用
 
-### 批次 E · v1.5 直连改造(2026-08-24 立项,M 拍板路径 A;2026-08-25 细化)
+### 批次 E · v1.5 直连改造(2026-08-24 立项,M 拍板路径 A;2026-08-25 细化;2026-08-25 第一批收口)
 
 > 通路1/3 执行载体切换为 Hub 直连 ATP HTTP 面(契约 §4.8;子契约 v1.2 §11)。ATP 侧(本仓)任务 = M-E1~M-E7;
 > 外部配合(Hub/PMS/运维)清单见下方"批次 E 外部配合清单",随本计划一并传递。
 > **开工基线(2026-08-25 盘点)**:可复用资产 = HTTP 运维面 4 端点(/health /api/submit /api/command /api/jobs/{id},
 > 与 tzcomm 面共享 Jobs 池)+ baseline/vs_baseline 机制(CLI 层)+ 回调组包逻辑(examples/ci/report.py,语义已对齐 §4.3);
 > 全新增 = cid 概念/认证/checkout/主动回调/串行/契约态状态查询。pytest unit 139 全绿。
+> **第一批收口(2026-08-25,M 批准 M-E1~M-E4,按建议顺序 M-E5 先行)**:M-E1/M-E5/M-E3/M-E4 完成——
+> server/ 新增 evaluations.py(cid 幂等 SQLite)+ checkout.py(本地路径版,远端 mirror/worktree 随 M-E2)+ callback.py(summarize 内化/退避重试/基线滚动);
+> http.py 新增 /atp/evaluations(POST+GET)、/atp/health;server.py Jobs 池改单 worker 队列(HTTP/tzcomm 面共享)。
+> 验收:pytest 192 全绿(新增 unit 2 文件 + functional 1 文件;mock Hub 验回调载荷/重试/留痕)。余 M-E2(待 O2 deploy key)→ M-E6(待 Hub 调度模块)。
 
-- [ ] **M-E1 submit 接口**:`POST /atp/evaluations`(server/http.py 扩展)
+- [x] **M-E1 submit 接口**:`POST /atp/evaluations`(server/http.py 扩展)——**已收口(2026-08-25)**
   - 认证:Bearer `atp.service_token`(FastAPI Depends;未配置→503 端点关闭,错/缺→401,hmac.compare_digest 防时序——
     对齐 PMS require_service_token 范式);token 经 systemd Environment 注入
   - 收 `{correlation_id(必填), repo, ref, sha?, check_type(预留,恒 autotest), scenario?, save_baseline, pms_task_id?}`
@@ -164,7 +168,7 @@
   - checkout 后定位 manifest(submit 的 `scenario` 或仓根 `scenario.yaml`),拼绝对路径复用 server.submit 业务路径;
     `git rev-parse HEAD` 记实际 sha 回填(M-E1 的 202 响应与 M-E3 回调共用)
   - **验收**:本地等效 E2E(clone cicd_test → checkout 指定 ref → 评测 passed → sha 正确,对齐 M-D2 模式)
-- [ ] **M-E3 主动回调 Hub**:评测完成(含失败)自动 POST `hub.callback_url`(`/api/ci/callback`)
+- [x] **M-E3 主动回调 Hub**:评测完成(含失败)自动 POST `hub.callback_url`(`/api/ci/callback`)——**已收口(2026-08-25)**
   - 内化 examples/ci/report.py 的 summarize 逻辑(report.json + regression.json → summary 文本含 vs_baseline 计数)
     进 server;conclusion 判定沿用(report 读取失败/有 error/任一 testcase passed=False → failure;passed=None 数据流验证不判)
   - 报文:`{correlation_id, sha(实际 checkout), check_type:"autotest", conclusion, report:{summary, run_url 省略}, finished_at}`;
@@ -172,13 +176,13 @@
   - 失败重试:指数退避(1s/5s/15s 三次),最终失败记 session.log + job 标 callback_error——结果不丢,Hub 轮询兜底(M-E4)可拿回
   - `save_baseline=true` 且 success 时滚动 `artifacts/baseline.json`(先对比后滚动,对齐 M-D3 语义);vs_baseline 计数自动进 summary
   - **验收**:mock Hub server 验载荷(Bearer + 全字段 + vs_baseline + 实际 sha + finished_at,对齐 test_ci.py 模式)+ 重试/失败留痕用例
-- [ ] **M-E4 状态查询与探活**:`GET /atp/evaluations/{job_id}` + `GET /atp/health` 升级
+- [x] **M-E4 状态查询与探活**:`GET /atp/evaluations/{job_id}` + `GET /atp/health` 升级——**已收口(2026-08-25)**
   - 状态映射:内部状态 → `running|success|failure`;终态带 `{sha, report:{summary, run_url:null}, finished_at(ISO8601)}`;
     summary 复用 M-E3 生成器;未知 job → 404
   - health:`{ok, version(包版本单一来源), tzcomm(daemon 可达性快检带超时,复用 commcheck 第 1 级), queue(排队深度,M-E5 后有意义)}`;
     探活必须即时响应,不被串行队列阻塞
   - **验收**:单测覆盖 running/终态/404;health 字段齐 + tzcomm 不可达降级
-- [ ] **M-E5 单 ATP 串行语义**:评测机资源独占,server 内排队(契约 §4.8 并发语义)
+- [x] **M-E5 单 ATP 串行语义**:评测机资源独占,server 内排队(契约 §4.8 并发语义)——**已收口(2026-08-25)**
   - 现 Jobs 池"每 job 一线程并发"改为单 worker 队列;HTTP submit 与 tzcomm 面 `client run` 共享同一队列(语义最干净);
     `/api/command`(pause/step/resume)与 `/health` 不受队列阻塞
   - 影响:test_service_parallel_jobs 等存量并行语义测试改为验证排队语义
@@ -263,7 +267,7 @@ lint 多检查编排(Hub Phase 1)、Hub 管理界面深化(ATP 池监控/操作�
 
 ```
 A0 ─▶ A1 ─▶ A2 ─▶ A3/A4 ─▶ 批次B ─▶ 批次D(均已收口,本工程)
-                                        └─▶ 批次E(M-E1~M-E5 本仓闭环;M-E6 待 Hub 调度模块)
+                                        └─▶ 批次E(M-E1/M-E5/M-E3/M-E4 ✅(2026-08-25);余 M-E2 待 O2;M-E6 待 Hub 调度模块)
 Hub v0.5.0(v1.3/v1.4 资产✅)─▶ v1.5 调度模块 6 项(同事)─┘
 PMS v0.27.2(✅ 零改动);通路2/4 已具备联调条件,并入 M-E6
 ```
@@ -272,7 +276,7 @@ PMS v0.27.2(✅ 零改动);通路2/4 已具备联调条件,并入 M-E6
 
 | 通路 | Autotest 侧 | 就绪度 | 阻塞项 / 依赖 |
 |---|---|---|---|
-| **通路1**(自动闭环) | M-D1 HTTP 面就位(:2335);**批次 E 未开工(M-E1~M-E5)** | **双侧改造中** | ① ATP 批次 E(本仓);② Hub 调度模块 6 项(外部配合清单 Hub 1-7);③ GitHub App 补 Checks:write(O1);④ ATP 机 deploy key(O2);⑤ PMS 端点已齐(v0.27.2,零改动) |
+| **通路1**(自动闭环) | M-D1 HTTP 面就位(:2335);**批次 E 第一批已收口(M-E1/M-E5/M-E3/M-E4),余 M-E2** | **双侧改造中** | ① ATP 批次 E 余 M-E2(本仓,待 O2);② Hub 调度模块 6 项(外部配合清单 Hub 1-7);③ GitHub App 补 Checks:write(O1);④ ATP 机 deploy key(O2);⑤ PMS 端点已齐(v0.27.2,零改动) |
 | **通路3**(手动预提交) | 同通路1(共享执行路径) | **双侧改造中** | 同通路1;Hub manual-check 旧模式已实现,待改 §4.8(Hub 第 7 项) |
 | **通路2**(事件通知) | 无动作(ATP 不感知) | **就绪待联调** | Hub 三型翻译 + PMS events 均已实现;联合 E2E 未跑(可并入 M-E6) |
 | **通路4**(交付物查询) | 无动作 | **就绪待联调** | Hub /hub/ci-results + PMS 本地 cid 表 + 出站兜底均已实现;联合 E2E 未跑(可并入 M-E6) |

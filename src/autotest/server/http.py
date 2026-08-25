@@ -1,23 +1,26 @@
-"""Autotest Service HTTP 面（部署/运维面，2335）。
+"""Autotest Service HTTP 面（2335）。
 
 与 tzcomm 服务面共享同一 AutotestService（同一 Jobs 池）：
-- tzcomm 面：runner 上 client run/pause/step/resume 的本机通路（v1.3 §2 硬约束，不变）；
-- HTTP 面：健康检查、状态轮询、调试命令的运维入口（不参与 Hub 触发链路，
-  Hub 触发仍走 workflow_dispatch → runner 本机 client，v1.3 §4.3）。
+- tzcomm 面：本机 client run/pause/step/resume 通路（v1.5 §3.3 同机约束，不变）；
+- HTTP 面：健康检查、状态轮询、调试命令的运维入口 + **v1.5 §4.8 ATP 对外端点**
+  （Hub 直连触发评测 / 状态轮询兜底 / 池化探活，M-E1 起逐批落地）。
 
 启动：python3 -m autotest.server.http（端口 AUTOTEST_HTTP_PORT，默认 2335）。
 """
 from __future__ import annotations
 
+import hmac
+import importlib.metadata
 import os
 import threading
 from typing import Any, Optional
 
-from fastapi import FastAPI, Response
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from pydantic import BaseModel, Field
 
 import tzcomm
 
+from ..commcheck import check_daemon
 from .server import AutotestService
 
 DEFAULT_HTTP_PORT = 2335
@@ -35,6 +38,34 @@ class CommandRequest(BaseModel):
     job_id: str
     command: str  # pause / step / resume
     n: int = 1
+
+
+class EvaluationRequest(BaseModel):
+    """v1.5 §4.8：Hub → ATP 评测提交载荷（坐标 only，评测逻辑来自 checkout 内容）。"""
+
+    correlation_id: str = Field(min_length=1)  # Hub 对账锚点（chk_<ULID>），幂等键
+    repo: str = Field(min_length=1)  # M-E1: 本地路径；M-E2: git URL（mirror 缓存 + worktree）
+    ref: Optional[str] = None
+    sha: Optional[str] = None  # 预留（Hub 已知 sha 时透传对账；实际 sha 以 checkout 回填为准）
+    check_type: str = "autotest"  # 预留，恒 autotest
+    scenario: Optional[str] = None  # manifest 相对仓根路径（缺省 scenario.yaml）
+    save_baseline: bool = False  # 评测成功且该位置 true 时滚动基线（M-E3 生效）
+    pms_task_id: Optional[str] = None  # 预留（PMS 任务锚点透传）
+
+
+def require_service_token(authorization: str = Header(default="")) -> bool:
+    """Hub→ATP Bearer 认证（对齐 PMS require_service_token 范式）：
+    未配置 ATP_SERVICE_TOKEN → 503（端点关闭）；缺失/不符 → 401（compare_digest 防时序）。
+    token 经 systemd Environment 注入；每次请求读 env，便于测试与轮换。
+    """
+    token = os.environ.get("ATP_SERVICE_TOKEN", "").strip()
+    if not token:
+        raise HTTPException(503, "ATP 服务端点未启用（未配置 ATP_SERVICE_TOKEN）")
+    prefix = "Bearer "
+    got = authorization[len(prefix):].strip() if authorization.startswith(prefix) else ""
+    if not got or not hmac.compare_digest(got, token):
+        raise HTTPException(401, "atp.service_token 无效或缺失")
+    return True
 
 
 def create_app(service: AutotestService) -> FastAPI:
@@ -67,7 +98,67 @@ def create_app(service: AutotestService) -> FastAPI:
             response.status_code = 404
         return reply
 
+    # ---- v1.5 §4.8 ATP 对外端点（Hub 直连通路，M-E1）----
+
+    @app.post("/atp/evaluations", status_code=202)
+    def submit_evaluation(req: EvaluationRequest, response: Response,
+                          _: bool = Depends(require_service_token)) -> dict:
+        if req.check_type != "autotest":
+            response.status_code = 400
+            return {"ok": False, "error": f"check_type 仅支持 autotest（预留）: {req.check_type!r}"}
+        # cid 幂等：同 cid → 200 duplicate，不重复执行（Hub 重发/超时空转安全）
+        existing = service.evaluations.get_by_cid(req.correlation_id)
+        if existing is not None:
+            response.status_code = 200
+            return {"ok": True, "duplicate": True, "job_id": existing["job_id"]}
+        reply = service.submit_evaluation(req.model_dump())
+        if reply.get("error"):
+            response.status_code = 400  # 坐标类错误（repo/ref 不可达、manifest 缺失）→ Hub 直接判 failure
+            return {"ok": False, "error": reply["error"]}
+        if reply.get("duplicate"):  # 并发同 cid 的 PK 兜底分支
+            response.status_code = 200
+            return {"ok": True, "duplicate": True, "job_id": reply["job_id"]}
+        return {"ok": True, "job_id": reply["job_id"], "sha": reply.get("sha")}
+
+    # ---- v1.5 §4.8 状态查询与探活（M-E4；探活必须即时响应，不被 M-E5 串行队列阻塞）----
+
+    @app.get("/atp/evaluations/{job_id}")
+    def evaluation_status(job_id: str, response: Response,
+                          _: bool = Depends(require_service_token)) -> dict:
+        row = service.evaluations.get_by_job_id(job_id)
+        if row is None:
+            response.status_code = 404
+            return {"ok": False, "error": f"未知 job_id: {job_id!r}"}
+        if row["status"] == "running":  # 含排队中（契约无 queued 态，对 Hub 即 running）
+            return {"job_id": job_id, "status": "running"}
+        return {
+            "job_id": job_id,
+            "status": row["status"],
+            "sha": row["sha"],
+            "report": {"summary": row["summary"], "run_url": None},  # run_url 语义归 Hub（v1.5）
+            "finished_at": row["finished_at"],
+        }
+
+    @app.get("/atp/health")
+    def atp_health() -> dict:
+        # tzcomm daemon 快检（socket connect 带超时，不经评测队列）；ATP 无 tzcomm 即不可评测 → ok=False
+        daemon = check_daemon(timeout=0.5)
+        return {
+            "ok": daemon.ok,
+            "version": _atp_version(),
+            "tzcomm": daemon.ok,
+            "queue": service.queue_depth,
+        }
+
     return app
+
+
+def _atp_version() -> str:
+    """包版本（单一事实源 pyproject；未安装环境退化为 dev）。"""
+    try:
+        return importlib.metadata.version("tz_atp")
+    except importlib.metadata.PackageNotFoundError:
+        return "dev"
 
 
 def main() -> None:

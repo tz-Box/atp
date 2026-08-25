@@ -36,6 +36,13 @@ class ArtifactRecorder:
             self._log_fh.write(f"[{time.strftime('%H:%M:%S')}] {message}\n")
             self._log_fh.flush()
 
+    @staticmethod
+    def append_log(directory: Path | str, message: str) -> None:
+        """独立句柄追加一行 session.log——供生命周期晚于 recorder.close() 的
+        后台线程使用（M-E3 回调线程重试期间 recorder 句柄已关闭）。"""
+        with (Path(directory) / "session.log").open("a", encoding="utf-8") as fh:
+            fh.write(f"[{time.strftime('%H:%M:%S')}] {message}\n")
+
     def save_report(self, payload: dict[str, Any]) -> None:
         with self._lock:
             (self._dir / "report.json").write_text(
