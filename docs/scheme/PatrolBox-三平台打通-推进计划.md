@@ -156,6 +156,16 @@
 > 验收:pytest 206 全绿(unit +13:URL 识别/缓存键/隔离/复用 fetch/清理/清扫;functional +1:file:// bare 仓 E2E)。
 > **本仓 M-E1~M-E5 全部收口**;余 M-E6(待 Hub 调度模块)→ M-E7(文档,贯穿收尾);
 > deploy key(O2)为部署配置,就绪后真仓验证随 M-E6 一并覆盖。
+> **M-E8+X3 收口(2026-08-25,同日续)**:新增 ATP HTTP client(`python3 -m autotest.client atp health/submit/
+> status/wait`,urllib 零新依赖,退出码可接 CI gate;手动触发/联调自验/排障重放);deploy/autotest.service 加
+> `EnvironmentFile=-%h/.config/autotest/atp.env` 三件套注入(token 不入库)。**真机部署验证通过**:systemd 常驻
+> :2335,health/submit 202/评测 success(summary 含 vs_baseline)/同 cid duplicate 全链路;dev token 自验,正式
+> token 待 O3。pytest 219 全绿(unit +13 client)。同步文档已发:Hub 仓 docs/ATP-v1.5-就绪公告与接口事实-2026-08-25.md、
+> PMS 仓 docs/plan/ATP-v1.5-就绪同步-2026-08-25.md。
+> **Hub 侧进度发现(2026-08-25 读码)**:v1.5 调度模块已基本实现(atp_pool 探活择路/dispatcher 分路含 4xx 判
+> failure·5xx 重投·duplicate·manual ref/collector 轮询兜底/save_baseline 事件侧,test_atp_direct 15+ 用例),
+> 其 mock 载荷与 ATP 接口逐字段对齐(repo 简写/ref 完整形均可解析)——M-E6 窗口临近,剩余为 checkruns 回写/
+> console 面板/超时扫描适配/文档及阻断项 deploy 三文件旧仓名。
 
 - [x] **M-E1 submit 接口**:`POST /atp/evaluations`(server/http.py 扩展)——**已收口(2026-08-25)**
   - 认证:Bearer `atp.service_token`(FastAPI Depends;未配置→503 端点关闭,错/缺→401,hmac.compare_digest 防时序——
@@ -192,11 +202,17 @@
     `/api/command`(pause/step/resume)与 `/health` 不受队列阻塞
   - 影响:test_service_parallel_jobs 等存量并行语义测试改为验证排队语义
   - **验收**:并发提交 2 个评测 → 串行执行、顺序可证;pytest 全绿
-- [ ] **M-E6 联调(Hub 调度模块就绪后)**:cicd_test 真实 push → Hub 编排 → 直连 ATP → 倒立摆评测 →
+- [ ] **M-E6 联调(Hub 调度模块已基本实现,待 O1/O2/O3+Hub 阻断项后启动)**:cicd_test 真实 push → Hub 编排 → 直连 ATP → 倒立摆评测 →
   回调归位(或轮询兜底)→ check-runs 回写 PR → PMS 落卡 + 飞书(失败);**与 Hub N1b 联合 E2E 合并**(同一 PR 生命周期);
   另覆盖通路3(mannultest 分支手动测试)与通路2/4(均已具备条件,一并验收)
 - [ ] **M-E7 文档**:部署文档补 deploy key/workspace/atp.service_token/hub.callback_* 配置;
   《算法测试接入手册》CI 章节改直连版(GHA workflow 标注为自测备选);《使用指南》§8 同步;契约 §14 纪律回写(v1.2 已先行一轮)
+- [x] **M-E8 ATP HTTP client**(2026-08-25 增补立项,同日收口):手动触发测试与联调自验工具——
+  `python3 -m autotest.client atp health/submit/status/wait`(挂现有 client CLI,与 tzcomm 面 run/matrix 并列)
+  - urllib 零新依赖;ATP_BASE_URL(缺省 http://127.0.0.1:2335)/ATP_SERVICE_TOKEN 两 env;
+    cid 缺省 chk_manual_<时间戳>(幂等安全重放);submit 默认等终态(--no-wait 可关)
+  - 出站连接不监听端口,与 autotest service 同机共存无冲突;退出码 0/1/2 可接 CI gate
+  - **验收**:mock ATP server 单测 13 全绿(载荷/认证/轮询/超时/退出码);真机全链路(health/submit/wait/duplicate)
 
 #### 批次 E 建议开工顺序(本仓内,不依赖外部)
 
@@ -239,7 +255,11 @@ M-E4 复用 M-E3 的 summary 生成器;M-E2 依赖运维 deploy key(O2)放内部
 > **2026-08-25 盘点(Hub v0.5.0)**:v1.3/v1.4 资产完备——webhooks(验签/幂等/路由/中继/翻译)、Redis Stream 队列、
 > dispatcher(workflow_dispatch 旧模式)、callback 归位(幂等+sha 回填)、pms_adapter(outbox+matched:false 重驱)、
 > 超时扫描、manual-check+分支清理、events 三型翻译、四 pull 端点(缓存语义齐)、飞书 OAuth(C3a)、五 tab 控制台,约 145+ 测试。
-> **v1.5 改造未开工,清单见"批次 E 外部配合清单"Hub 侧 1-10。**
+> **v1.5 调度模块已基本实现(2026-08-25 读码确认)**:atp_pool(routes 一对多/健康优先择浅/转入不健康 ci_alert 一次)、
+> dispatcher 分路(202 即返/4xx 判 failure 推 PMS/5xx 与无健康 ATP 留 pending 重投/duplicate 幂等/manual ref 语义/
+> save_baseline 透传)、collector 轮询兜底(running 不动/终态归位推 PMS/回调先到 duplicate 安全/不可达不误判)、
+> save_baseline 事件侧(主干 push 滚基线),test_atp_direct 15+ 用例;**剩余**:checkruns 回写(依赖 O1)、console ATP
+> 面板、超时扫描对 ATP 的适配、文档回写、阻断项 deploy 三文件旧仓名(清单 Hub 1-10 之 6/8/9/10 等)。
 - [x] webhooks / 路由 / Redis Stream 队列 + dispatcher(旧模式)/ callback 归位 / pms_adapter(同事侧,Hub v0.5.0)
 - [ ] **验收(通路1,v1.5 形态)**:push → Hub → 直连 ATP → 评测 → 回调/轮询归位 → check-runs 回写 → ci-results → PMS 任务卡 + 飞书(= M-E6,随批次 E)
 
@@ -286,7 +306,9 @@ PMS v0.27.2(✅ 零改动);通路2/4 已具备联调条件,并入 M-E6
 | **通路2**(事件通知) | 无动作(ATP 不感知) | **就绪待联调** | Hub 三型翻译 + PMS events 均已实现;联合 E2E 未跑(可并入 M-E6) |
 | **通路4**(交付物查询) | 无动作 | **就绪待联调** | Hub /hub/ci-results + PMS 本地 cid 表 + 出站兜底均已实现;联合 E2E 未跑(可并入 M-E6) |
 
-**结论**:v1.5 瓶颈 = ~~ATP 批次 E(本仓)~~ **已收口(2026-08-25,M-E1~M-E5 ✅)** → 当前唯一瓶颈 = **Hub 调度模块(同事)**;接口面(§4.8)已冻结,Hub 侧按"批次 E 外部配合清单"1-7 实现即可并联调(M-E6);
+**结论**:v1.5 瓶颈 = ~~ATP 批次 E(本仓)~~ **已收口(2026-08-25,M-E1~M-E5+M-E8 ✅,X3 机制就位)** →
+Hub 调度模块**亦已基本实现(2026-08-25 读码确认)** → 当前进入 **M-E6 联合 E2E 准备期**,
+待办:O1(App Checks:write)/O2(deploy key)/O3(正式 token+HUB_CALLBACK_* 配置)/Hub 阻断项 deploy 三文件;
 通路2/4 已具备联合 E2E 条件,建议并入 M-E6 同一 PR 生命周期一并验收。
 本仓 M-E1~M-E5 已全部本仓内闭环验收(mock Hub + file:// 模拟远端);
 M-E2 的 deploy key(O2)仅部署配置(系统 ssh config),真仓验证并入 M-E6;M-E6 依赖 Hub 调度模块 + O1。

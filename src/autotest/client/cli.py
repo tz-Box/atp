@@ -7,6 +7,8 @@
   pause <job_id>                                  暂停喂帧（调试：世界冻结，SUT 安全等待）
   step <job_id> [-n N]                            暂停中单步放行 N 帧（默认 1）
   resume <job_id>                                 恢复全速
+  atp health|submit|status|wait [...]             ATP HTTP 面（v1.5，M-E8：手动触发/联调自验，
+                                                  Hub 同款接口；详见 atp <cmd> -h）
 
 流程：
   1) 经 autotest/control 提交评测（manifest 路径），拿到 job_id（异步）；
@@ -240,7 +242,13 @@ def main(argv: list[str] | None = None) -> int:
     resume_parser.add_argument("job_id", help="评测 job_id")
     resume_parser.add_argument("--json", action="store_true", help="以 JSON 输出")
 
-    args = parser.parse_args(argv)
+    # ATP HTTP 面（M-E8）：子命令组转发 client/atp.py（REMAINDER 原样传递）
+    sub.add_parser("atp", help="ATP HTTP 面 client（v1.5：health/submit/status/wait）")
+    args, atp_argv = parser.parse_known_args(argv)
+
+    if args.cmd == "atp":
+        from .atp import main as atp_main  # 延迟导入：tzcomm 面命令无需 HTTP 依赖
+        return atp_main(atp_argv)  # "atp" 本身已被 subparsers 消费，extras 即子命令参数
 
     if args.cmd == "run":
         return run(args.manifest, scenario=args.scenario, clock_rate=args.clock_rate, as_json=args.json)
