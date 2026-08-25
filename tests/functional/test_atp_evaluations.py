@@ -187,3 +187,56 @@ def test_atp_evaluations_failure_terminal(daemon, tmp_path, monkeypatch):
         assert row["finished_at"]
     finally:
         service.close()
+
+
+def test_atp_evaluations_remote_checkout_end_to_end(daemon, tmp_path, monkeypatch):
+    """M-E2：file:// 远端 → mirror 缓存 + worktree 隔离 → 真评测 → 终态后 worktree 清理。"""
+    monkeypatch.setenv("ATP_SERVICE_TOKEN", _TOKEN)
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("ATP_CACHE_ROOT", str(cache))
+    # 源仓（manifest 引用 autotest 仓内 echo SUT/场景绝对路径，无需随仓分发）→ bare 远端
+    src = tmp_path / "src"
+    src.mkdir()
+    manifest = {
+        "launch": f"{sys.executable} {_ALGO}",
+        "consumes": ["pipe.slam.SlamObs"],
+        "scenario": _SCENARIO,
+        "required_sensors": {"lidar": ["front"]},
+    }
+    (src / "scenario.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    _git(src, "init", "-q", "-b", "main")
+    _git(src, "add", "-A")
+    _git(src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    expected_sha = _git(src, "rev-parse", "HEAD")
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(src), str(bare)],
+                   check=True, capture_output=True)
+
+    service = AutotestService(name="test-service-atp-e2e2")
+    threading.Thread(target=service.spin, daemon=True).start()
+    time.sleep(0.5)
+    client = TestClient(create_app(service))
+    try:
+        resp = client.post("/atp/evaluations", json={
+            "correlation_id": "chk_func04", "repo": f"file://{bare}",
+        }, headers={"Authorization": f"Bearer {_TOKEN}"})
+        assert resp.status_code == 202, resp.json()
+        body = resp.json()
+        assert body["sha"] == expected_sha  # mirror rev-parse 回填实际 sha
+        job_id = body["job_id"]
+        worktree = cache / "workspaces" / job_id
+
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if service.job_status(job_id)["status"] == "done":
+                break
+            time.sleep(0.2)
+        row = service.evaluations.get_by_cid("chk_func04")
+        assert row["status"] == "success" and row["sha"] == expected_sha
+
+        assert not worktree.exists()  # 终态后隔离现场已清理
+        mirrors = list((cache / "repos").iterdir())
+        assert len(mirrors) == 1  # mirror 缓存保留复用
+        assert job_id not in _git(mirrors[0], "worktree", "list", "--porcelain")
+    finally:
+        service.close()

@@ -140,7 +140,7 @@
   2026-08-24 M 拍板路径 A(Hub 直连 ATP):runner 依赖取消,原"runner 注册→GHA 派单→真评测首跑"
   联调形态废止;已完成的 M-D2/D3 资产(cicd_test manifest/SUT/基线机制)全部保留复用
 
-### 批次 E · v1.5 直连改造(2026-08-24 立项,M 拍板路径 A;2026-08-25 细化;2026-08-25 第一批收口)
+### 批次 E · v1.5 直连改造(2026-08-24 立项,M 拍板路径 A;2026-08-25 细化;2026-08-25 第一批+M-E2 收口)
 
 > 通路1/3 执行载体切换为 Hub 直连 ATP HTTP 面(契约 §4.8;子契约 v1.2 §11)。ATP 侧(本仓)任务 = M-E1~M-E7;
 > 外部配合(Hub/PMS/运维)清单见下方"批次 E 外部配合清单",随本计划一并传递。
@@ -148,9 +148,14 @@
 > 与 tzcomm 面共享 Jobs 池)+ baseline/vs_baseline 机制(CLI 层)+ 回调组包逻辑(examples/ci/report.py,语义已对齐 §4.3);
 > 全新增 = cid 概念/认证/checkout/主动回调/串行/契约态状态查询。pytest unit 139 全绿。
 > **第一批收口(2026-08-25,M 批准 M-E1~M-E4,按建议顺序 M-E5 先行)**:M-E1/M-E5/M-E3/M-E4 完成——
-> server/ 新增 evaluations.py(cid 幂等 SQLite)+ checkout.py(本地路径版,远端 mirror/worktree 随 M-E2)+ callback.py(summarize 内化/退避重试/基线滚动);
+> server/ 新增 evaluations.py(cid 幂等 SQLite)+ checkout.py + callback.py(summarize 内化/退避重试/基线滚动);
 > http.py 新增 /atp/evaluations(POST+GET)、/atp/health;server.py Jobs 池改单 worker 队列(HTTP/tzcomm 面共享)。
-> 验收:pytest 192 全绿(新增 unit 2 文件 + functional 1 文件;mock Hub 验回调载荷/重试/留痕)。余 M-E2(待 O2 deploy key)→ M-E6(待 Hub 调度模块)。
+> **M-E2 收口(2026-08-25,同日续)**:checkout.py 扩 git URL/owner-repo 识别(ATP_GIT_BASE)+ mirror 缓存
+> (~/.cache/autotest/repos/<owner>__<repo>.git,ATP_CACHE_ROOT 可配)+ 按 job worktree 隔离(workspaces/<job_id>)
+> + 终态清理(ATP_WORKTREE_KEEP=1 保留排查)+ 启动 cleanup_stale 清扫;坐标/manifest 失败即时清理不留现场。
+> 验收:pytest 206 全绿(unit +13:URL 识别/缓存键/隔离/复用 fetch/清理/清扫;functional +1:file:// bare 仓 E2E)。
+> **本仓 M-E1~M-E5 全部收口**;余 M-E6(待 Hub 调度模块)→ M-E7(文档,贯穿收尾);
+> deploy key(O2)为部署配置,就绪后真仓验证随 M-E6 一并覆盖。
 
 - [x] **M-E1 submit 接口**:`POST /atp/evaluations`(server/http.py 扩展)——**已收口(2026-08-25)**
   - 认证:Bearer `atp.service_token`(FastAPI Depends;未配置→503 端点关闭,错/缺→401,hmac.compare_digest 防时序——
@@ -161,7 +166,7 @@
   - 响应 `202 {ok, job_id, sha}`(sha 由 checkout 回填,M-E2 前过渡为 null);
     校验失败 4xx `{ok:false, error}`(token/repo·ref 不可达/manifest 缺失)→ Hub 直接判 failure 免等超时
   - **验收**:TestClient 单测(401/503/字段校验/幂等 duplicate/202 骨架),pytest 全绿
-- [ ] **M-E2 workspace 与 checkout**:按 repo 缓存 git 仓、按 ref/sha worktree 隔离到本机 workspace
+- [x] **M-E2 workspace 与 checkout**:按 repo 缓存 git 仓、按 ref/sha worktree 隔离到本机 workspace——**代码已收口(2026-08-25)**;deploy key 部署配置随 O2/M-E7,真仓验证并入 M-E6
   - 布局:`~/.cache/autotest/repos/<owner>__<repo>.git`(mirror 缓存,fetch 更新)+ `workspaces/<job_id>/`
     (`git worktree add` 按 ref/sha 隔离);评测落盘后 worktree 清理(保留期可配,便于排查)
   - 凭证:GitHub 只读 deploy key(ssh;部署细节入 M-E7 文档)【依赖运维 O2】
@@ -267,7 +272,7 @@ lint 多检查编排(Hub Phase 1)、Hub 管理界面深化(ATP 池监控/操作�
 
 ```
 A0 ─▶ A1 ─▶ A2 ─▶ A3/A4 ─▶ 批次B ─▶ 批次D(均已收口,本工程)
-                                        └─▶ 批次E(M-E1/M-E5/M-E3/M-E4 ✅(2026-08-25);余 M-E2 待 O2;M-E6 待 Hub 调度模块)
+                                        └─▶ 批次E(M-E1~M-E5 ✅ 本仓全收口(2026-08-25);M-E6 待 Hub 调度模块;M-E7 文档贯穿收尾)
 Hub v0.5.0(v1.3/v1.4 资产✅)─▶ v1.5 调度模块 6 项(同事)─┘
 PMS v0.27.2(✅ 零改动);通路2/4 已具备联调条件,并入 M-E6
 ```
@@ -276,15 +281,15 @@ PMS v0.27.2(✅ 零改动);通路2/4 已具备联调条件,并入 M-E6
 
 | 通路 | Autotest 侧 | 就绪度 | 阻塞项 / 依赖 |
 |---|---|---|---|
-| **通路1**(自动闭环) | M-D1 HTTP 面就位(:2335);**批次 E 第一批已收口(M-E1/M-E5/M-E3/M-E4),余 M-E2** | **双侧改造中** | ① ATP 批次 E 余 M-E2(本仓,待 O2);② Hub 调度模块 6 项(外部配合清单 Hub 1-7);③ GitHub App 补 Checks:write(O1);④ ATP 机 deploy key(O2);⑤ PMS 端点已齐(v0.27.2,零改动) |
-| **通路3**(手动预提交) | 同通路1(共享执行路径) | **双侧改造中** | 同通路1;Hub manual-check 旧模式已实现,待改 §4.8(Hub 第 7 项) |
+| **通路1**(自动闭环) | M-D1 HTTP 面就位(:2335);**批次 E 本仓全收口(M-E1~M-E5 ✅)** | **ATP 就绪,待 Hub** | ① ~~ATP 批次 E~~(本仓收口);② Hub 调度模块 6 项(外部配合清单 Hub 1-7);③ GitHub App 补 Checks:write(O1);④ ATP 机 deploy key(O2,部署配置);⑤ PMS 端点已齐(v0.27.2,零改动) |
+| **通路3**(手动预提交) | 同通路1(共享执行路径) | **ATP 就绪,待 Hub** | 同通路1;Hub manual-check 旧模式已实现,待改 §4.8(Hub 第 7 项) |
 | **通路2**(事件通知) | 无动作(ATP 不感知) | **就绪待联调** | Hub 三型翻译 + PMS events 均已实现;联合 E2E 未跑(可并入 M-E6) |
 | **通路4**(交付物查询) | 无动作 | **就绪待联调** | Hub /hub/ci-results + PMS 本地 cid 表 + 出站兜底均已实现;联合 E2E 未跑(可并入 M-E6) |
 
-**结论**:v1.5 瓶颈 = **ATP 批次 E(本仓)+ Hub 调度模块(同事)** 双侧改造,二者接口面(§4.8)已冻结、可并行;
+**结论**:v1.5 瓶颈 = ~~ATP 批次 E(本仓)~~ **已收口(2026-08-25,M-E1~M-E5 ✅)** → 当前唯一瓶颈 = **Hub 调度模块(同事)**;接口面(§4.8)已冻结,Hub 侧按"批次 E 外部配合清单"1-7 实现即可并联调(M-E6);
 通路2/4 已具备联合 E2E 条件,建议并入 M-E6 同一 PR 生命周期一并验收。
-本仓开工不依赖外部:M-E1/M-E5/M-E3/M-E4 全部可本仓内闭环验收(mock Hub);
-M-E2 依赖 O2(deploy key);M-E6 依赖 Hub 调度模块 + O1。
+本仓 M-E1~M-E5 已全部本仓内闭环验收(mock Hub + file:// 模拟远端);
+M-E2 的 deploy key(O2)仅部署配置(系统 ssh config),真仓验证并入 M-E6;M-E6 依赖 Hub 调度模块 + O1。
 
 ## 5. 风险与待决项
 

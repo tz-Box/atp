@@ -31,7 +31,9 @@ from ..registry import get_checker, get_dataset, load_plugin, validate_produces_
 from ..scenario import load_scenario
 from .artifacts import ArtifactRecorder, artifacts_root
 from .callback import finalize_evaluation
-from .checkout import CheckoutError, locate_manifest, resolve_checkout
+from .checkout import (
+    CheckoutError, cleanup_stale, locate_manifest, prepare_checkout, remove_worktree,
+)
 from .evaluations import EvaluationStore
 from .job import Job, result_to_dict
 
@@ -62,10 +64,18 @@ class AutotestService:
         self._worker = threading.Thread(target=self._worker_loop, daemon=True,
                                         name="autotest-worker")
         self._worker.start()
+        # M-E2：清扫上次异常退出滞留的 worktree（workspaces/<job_id>）
+        for path in cleanup_stale():
+            print(f"[checkout] 清理滞留 worktree: {path}")
 
     # ---- 公共业务面（tzcomm 服务与 HTTP 面共享同一 Jobs 池） ----
-    def submit(self, request: dict, eval_ctx: Optional[dict] = None) -> dict:
-        """提交评测：立即返回 job_id，异步执行。eval_ctx 见 Job（仅 Hub 直连通路携带）。"""
+    def submit(self, request: dict, eval_ctx: Optional[dict] = None,
+               job_id: Optional[str] = None) -> dict:
+        """提交评测：立即返回 job_id，异步执行。eval_ctx 见 Job（仅 Hub 直连通路携带）。
+
+        job_id 缺省生成；Hub 直连通路提前生成传入（M-E2 worktree 目录以 job_id 命名，
+        须在 checkout 前确定）。
+        """
         try:
             manifest = load_algorithm_manifest(request["manifest"])
             scenario_path = request.get("scenario") or manifest.scenario
@@ -81,7 +91,7 @@ class AutotestService:
         except Exception as exc:  # noqa: BLE001 配置错误直接回传给 client
             return {"error": f"{type(exc).__name__}: {exc}"}
 
-        job_id = f"autotest-{uuid.uuid4().hex[:8]}"
+        job_id = job_id or f"autotest-{uuid.uuid4().hex[:8]}"
         raw_rate = request.get("clock_rate")
         clock_rate = 1.0 if raw_rate is None else raw_rate  # 默认 1.0=实时复现；显式 0/None 由 Loader 视为全速
         job = Job(
@@ -102,35 +112,45 @@ class AutotestService:
         return self._eval_store
 
     def submit_evaluation(self, req: dict) -> dict:
-        """v1.5 §4.8（M-E1）：Hub 直连评测提交——checkout 定位 manifest 后走公共 submit。
+        """v1.5 §4.8（M-E1/M-E2）：Hub 直连评测提交——checkout 备好现场后走公共 submit。
 
         req: correlation_id/repo/ref/sha?/check_type/scenario?/save_baseline/pms_task_id?
         返回 {"job_id", "sha"} / {"duplicate": True, "job_id"} / {"error"}（坐标类 4xx 语义）。
+        M-E2：git URL/owner-repo → mirror 缓存 + worktree 隔离（目录以 job_id 命名，须先生成）；
+        坐标/manifest 失败时 worktree 立即清理，不留现场。
         """
         cid = req["correlation_id"]
+        job_id = f"autotest-{uuid.uuid4().hex[:8]}"
+        checkout = None
         try:
-            repo_dir, sha = resolve_checkout(req["repo"], req.get("ref"))
-            manifest_path = locate_manifest(repo_dir, req.get("scenario"))
+            checkout = prepare_checkout(req["repo"], req.get("ref"), job_id=job_id)
+            manifest_path = locate_manifest(checkout.repo_dir, req.get("scenario"))
         except CheckoutError as exc:
+            if checkout is not None and checkout.worktree is not None:
+                remove_worktree(checkout.worktree)
             return {"error": str(exc)}
         reply = self.submit({"manifest": str(manifest_path)}, eval_ctx={
-            "cid": cid, "repo": req["repo"], "ref": req.get("ref"), "sha": sha,
+            "cid": cid, "repo": req["repo"], "ref": req.get("ref"), "sha": checkout.sha,
             "check_type": req.get("check_type") or "autotest",
             "scenario": req.get("scenario"),
             "save_baseline": bool(req.get("save_baseline")),
             "pms_task_id": req.get("pms_task_id"),
-        })
+            "checkout": checkout,  # M-E2：worker 终态后清理 worktree
+        }, job_id=job_id)
         if reply.get("error"):
+            if checkout.worktree is not None:
+                remove_worktree(checkout.worktree)
             return reply
         created = self._eval_store.create(
-            cid=cid, job_id=reply["job_id"], repo=req["repo"], ref=req.get("ref"), sha=sha,
+            cid=cid, job_id=reply["job_id"], repo=req["repo"], ref=req.get("ref"),
+            sha=checkout.sha,
             check_type=req.get("check_type") or "autotest", scenario=req.get("scenario"),
             save_baseline=bool(req.get("save_baseline")), pms_task_id=req.get("pms_task_id"),
         )
         if not created:  # 并发同 cid：PK 兜底，返回先到的 job（幂等语义不破）
             existing = self._eval_store.get_by_cid(cid)
             return {"duplicate": True, "job_id": existing["job_id"]}
-        return {"job_id": reply["job_id"], "sha": sha}
+        return {"job_id": reply["job_id"], "sha": checkout.sha}
 
     def command(self, job_id: str, command: str, n: int = 1) -> dict:
         """调试命令（暂停/单步/继续，M-B3）。"""
@@ -307,6 +327,11 @@ class AutotestService:
             if job.eval_ctx is not None:
                 finalize_evaluation(job.eval_ctx, report_payload, self._eval_store,
                                     recorder.dir, recorder.log)
+                # M-E2：评测落盘后清理 worktree 隔离现场（ATP_WORKTREE_KEEP=1 保留排查）
+                checkout = job.eval_ctx.get("checkout")
+                if checkout is not None and checkout.worktree is not None:
+                    remove_worktree(checkout.worktree)
+                    recorder.log(f"[checkout] worktree 已清理: {checkout.worktree.path}")
             recorder.close()
 
     def spin(self) -> None:
