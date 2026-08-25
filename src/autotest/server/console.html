@@ -27,6 +27,7 @@
   input:focus { outline: 1px solid #3d6fb4; }
   button { background: #2563eb; border: 0; color: #fff; border-radius: 5px;
            padding: 6px 14px; font: inherit; cursor: pointer; }
+  button.mini { padding: 3px 10px; font-size: 12px; background: #334155; }
   button:disabled { background: #334155; cursor: default; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; color: #7f8b99; font-weight: 500; padding: 6px 8px;
@@ -51,10 +52,18 @@
 <header>
   <h1>ATP 控制台</h1><span id="hdr-ver" class="dim"></span>
   <div class="spacer"></div>
-  <input id="tok" type="password" placeholder="ATP_SERVICE_TOKEN" size="28">
-  <button id="tok-save">保存</button>
+  <span id="who" class="dim" style="font-size:13px"></span>
+  <span id="auth-box"></span>
+  <details id="tok-fold" style="display:inline-block">
+    <summary style="font-size:12px;color:#7f8b99;cursor:pointer;display:inline">机器 token 备选</summary>
+    <span style="display:inline-block;margin-left:6px">
+      <input id="tok" type="password" placeholder="ATP_SERVICE_TOKEN" size="24">
+      <button id="tok-save">保存</button>
+    </span>
+  </details>
   <label style="font-size:12px;color:#7f8b99"><input type="checkbox" id="auto" checked> 自动刷新</label>
 </header>
+<div id="banner" style="display:none;background:#3a1d1d;color:#f16a6a;padding:8px 20px;font-size:13px"></div>
 <main>
   <div class="card"><h2>健康</h2>
     <div class="grid">
@@ -91,12 +100,51 @@ const $ = id => document.getElementById(id);
 const tokInput = $("tok");
 tokInput.value = localStorage.getItem("atp_token") || "";
 $("tok-save").onclick = () => { localStorage.setItem("atp_token", tokInput.value.trim()); refresh(); };
-const auth = () => ({ "Authorization": "Bearer " + (localStorage.getItem("atp_token") || "") });
+// 人通道(cookie atp_session 自动携带)为主;机器 token(localStorage)为备选——两者并存,与 Hub console 同模式
+let me = null, oauthOn = false;  // me: null=未查询 / false=未登录 / {name,role}=已登录
+const auth = () => {
+  const t = localStorage.getItem("atp_token") || "";
+  return t ? { "Authorization": "Bearer " + t } : {};
+};
+const hasTok = () => !!(localStorage.getItem("atp_token") || "");
+const canWrite = () => hasTok() || (me && me.role === "admin");
+
+async function refreshAuth() {
+  try {
+    const [opt, mer] = await Promise.all([fetch("/api/auth/options"), fetch("/api/auth/me")]);
+    oauthOn = opt.ok ? (await opt.json()).oauth : false;
+    me = mer.ok ? await mer.json() : false;
+  } catch (e) { me = false; }
+  const box = $("auth-box");
+  if (me) {
+    $("who").textContent = `${me.name}（${me.role}）`;
+    box.innerHTML = `<button class="mini" onclick="logout()">登出</button>`;
+  } else {
+    $("who").textContent = "";
+    box.innerHTML = oauthOn
+      ? `<a href="/api/auth/feishu/start"><button>飞书登录</button></a>`
+      : `<span class="dim" style="font-size:12px">飞书登录未配置</span>`;
+  }
+  // 写档位:机器 token 或 admin 会话才可触发
+  $("s-go").disabled = !canWrite();
+  $("s-go").title = canWrite() ? "" : "只读成员（member）：请用 admin 账号飞书登录或机器 token";
+  refreshList();
+}
+async function logout() { await fetch("/api/auth/logout", { method: "POST" }); me = false; refreshAuth(); }
+// 登录失败回跳 ?login_error=...,横幅提示后清掉参数
+(function banner() {
+  const msg = new URLSearchParams(location.search).get("login_error");
+  if (!msg) return;
+  const b = $("banner"); b.style.display = "block"; b.textContent = "登录失败：" + msg;
+  history.replaceState(null, "", location.pathname);
+})();
 
 async function jget(url, opt) {
   const r = await fetch(url, opt);
-  if (r.status === 401) throw "401 未认证：请先在右上角填入 token";
-  if (r.status === 503) throw "503 端点未启用：服务端未配置 ATP_SERVICE_TOKEN";
+  if (r.status === 401) throw oauthOn ? "401 未认证：请点右上角「飞书登录」（或填机器 token）"
+                                       : "401 未认证：请在右上角填入机器 token";
+  if (r.status === 403) throw "403 只读成员：触发评测需 admin 或机器 token";
+  if (r.status === 503) throw "503 端点未启用：服务端未配置 ATP_SERVICE_TOKEN / 飞书登录";
   return r;
 }
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -176,12 +224,13 @@ $("f-submit").onsubmit = async ev => {
       msg.textContent = b.duplicate ? `重复提交（幂等）：原 job ${b.job_id}` : `已受理：${b.job_id}  sha=${b.sha || "-"}`;
     } else { msg.className = "bad"; msg.textContent = `失败 ${r.status}: ${b.error || JSON.stringify(b)}`; }
   } catch (e) { msg.className = "bad"; msg.textContent = String(e); }
-  btn.disabled = false;
+  btn.disabled = !canWrite();
   refreshList();
 };
 
 function refresh() { refreshHealth(); refreshList(); }
-refresh();
+refreshHealth();
+refreshAuth();  // 内部会 refreshList（依赖 me 判定写档位）
 setInterval(() => { if ($("auto").checked) refresh(); }, 5000);
 </script>
 </body>

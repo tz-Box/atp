@@ -233,6 +233,15 @@
     手动触发表单(repo/ref/scenario/save_baseline,cid 缺省 chk_manual_<ts> 幂等)、5s 自动刷新
   - 边界:ATP console = 单机执行面运维视图(本机排队/结果/手动触发);Hub console(V9 ATP 面板)= 池化调度视图,不重复建设
   - **验收**:单测 +5(认证/倒序字段/limit/页面无认证);真机 health/console 200/列表真实记录/无认证 401
+- [x] **M-E11 飞书登录授权**(2026-08-25 增补立项,同日收口;回应 M"console 绕过 service-token 手输,完全按 Hub 现在的方式"):
+  通路**复用 Hub/PMS 已验证范式**(server/auth.py,urllib 零新依赖;与 Hub 同路径 /api/auth/*)
+  - 人/机分层:读(列表/详情)=Bearer(机器,Hub 不受影响) **或** atp_session(member+);写(手动触发)=Bearer **或** admin 会话;member 写 → 403
+  - 白名单 ~/.config/autotest/console_users.json(600,name/oauth_open_id/role;open_id 首登姓名唯一匹配回填,与 Hub 同)
+  - 会话 sessions.json(原子写 600,重启不失效),cookie atp_session(HttpOnly/SameSite=Lax/14 天)
+  - 配置:atp.env 追加 FEISHU_APP_ID/SECRET(O3 分发,与 Hub/PMS 同一只自建应用);飞书后台登记 /api/auth/feishu/callback(按访问 Host 各自登记)
+  - console.html:顶栏改飞书登录/用户角色/登出为主通道,token 输入折叠为"机器 token 备选";login_error 横幅;写档位按钮联动
+  - **验收**:单测 14(成员门直中/回填/拒绝/state 失效/会话持久化/双通道三档/503-401 语义);pytest 239 全绿;
+    真机 oauth:false 降级/Bearer 不受影响/匿名 401 全通过;待 O3 分发 app_id/secret 后即可真机飞书登录
 
 #### 批次 E 建议开工顺序(本仓内,不依赖外部)
 

@@ -23,6 +23,13 @@
 #   可选：ATP_CACHE_ROOT（mirror/worktree 根，缺省 ~/.cache/autotest）、
 #         ATP_WORKTREE_KEEP=1（保留 worktree 现场排查）、ATP_GIT_BASE（owner/repo 简写前缀）。
 #
+# M-E11 飞书登录（/console 人通道，与 Bearer 机器通道并存；可选项，不配则仅机器通道可用）：
+#   atp.env 追加 FEISHU_APP_ID / FEISHU_APP_SECRET（与 Hub/PMS 同一只自建应用即可，O3 分发）；
+#   飞书后台登记回调 http://<atp-host 或域名>/api/auth/feishu/callback（按访问 Host 各自登记）；
+#   白名单 %h/.config/autotest/console_users.json（chmod 600）：
+#     {"users": [{"name": "张三", "oauth_open_id": "ou_xxx"(可空,首登回填), "role": "admin|member"}]}
+#   读（列表/详情）= member+，写（手动触发评测）= admin；会话落 sessions.json（600，14 天）。
+#
 # 安装（仓库里这份是源文件，改动后需重新拷贝安装）：
 #   mkdir -p ~/.config/systemd/user
 #   cp deploy/autotest.service ~/.config/systemd/user/

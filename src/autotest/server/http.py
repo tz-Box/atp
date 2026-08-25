@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,8 @@ import tzcomm
 
 from ..commcheck import check_daemon
 from ..registry import available_bodies, available_plugins
+from . import auth
+from .auth import current_user
 from .server import AutotestService
 
 DEFAULT_HTTP_PORT = 2335
@@ -57,24 +59,65 @@ class EvaluationRequest(BaseModel):
     pms_task_id: Optional[str] = None  # 预留（PMS 任务锚点透传）
 
 
+def _bearer_ok(authorization: str) -> bool:
+    """Bearer 命中已配置的 ATP_SERVICE_TOKEN（compare_digest 防时序；未配置 → False）。"""
+    token = os.environ.get("ATP_SERVICE_TOKEN", "").strip()
+    if not token:
+        return False
+    prefix = "Bearer "
+    got = authorization[len(prefix):].strip() if authorization.startswith(prefix) else ""
+    return bool(got) and hmac.compare_digest(got, token)
+
+
 def require_service_token(authorization: str = Header(default="")) -> bool:
     """Hub→ATP Bearer 认证（对齐 PMS require_service_token 范式）：
     未配置 ATP_SERVICE_TOKEN → 503（端点关闭）；缺失/不符 → 401（compare_digest 防时序）。
     token 经 systemd Environment 注入；每次请求读 env，便于测试与轮换。
     """
-    token = os.environ.get("ATP_SERVICE_TOKEN", "").strip()
-    if not token:
+    if not os.environ.get("ATP_SERVICE_TOKEN", "").strip():
         raise HTTPException(503, "ATP 服务端点未启用（未配置 ATP_SERVICE_TOKEN）")
-    prefix = "Bearer "
-    got = authorization[len(prefix):].strip() if authorization.startswith(prefix) else ""
-    if not got or not hmac.compare_digest(got, token):
+    if not _bearer_ok(authorization):
         raise HTTPException(401, "atp.service_token 无效或缺失")
     return True
+
+
+def require_reader(request: Request) -> bool:
+    """读通道（M-E11 人/机分层）：Bearer（机器，Hub）**或** atp_session（人，console 成员）。
+    两通道均未配置 → 503（端点关闭）；有配置但未通过 → 401。
+    """
+    if _bearer_ok(request.headers.get("authorization", "")):
+        return True
+    if current_user(request) is not None:
+        return True
+    _raise_auth_unavailable_or_401()
+    return True  # unreachable
+
+
+def require_writer(request: Request) -> bool:
+    """写通道（M-E11）：Bearer（机器全权）**或** admin 会话；member 会话 → 403（只读）。"""
+    if _bearer_ok(request.headers.get("authorization", "")):
+        return True
+    u = current_user(request)
+    if u is not None:
+        if u.get("role") == "admin":
+            return True
+        raise HTTPException(403, "只读成员（member）不可触发评测，请联系管理员提权")
+    _raise_auth_unavailable_or_401()
+    return True  # unreachable
+
+
+def _raise_auth_unavailable_or_401() -> None:
+    token_on = bool(os.environ.get("ATP_SERVICE_TOKEN", "").strip())
+    oauth_on = all(auth._oauth_cfg())
+    if not token_on and not oauth_on:
+        raise HTTPException(503, "ATP 服务端点未启用（未配置 ATP_SERVICE_TOKEN / 飞书登录）")
+    raise HTTPException(401, "未认证：请飞书登录或携带 Bearer token")
 
 
 def create_app(service: AutotestService) -> FastAPI:
     """在既有 AutotestService 上挂 HTTP 路由（与 tzcomm 面共享 Jobs 池）。"""
     app = FastAPI(title="autotest-service", version="0.1.0")
+    app.include_router(auth.router)  # M-E11 飞书登录（人通道，与 Bearer 机器通道分层并存）
 
     @app.get("/health")
     def health() -> dict:
@@ -106,7 +149,7 @@ def create_app(service: AutotestService) -> FastAPI:
 
     @app.post("/atp/evaluations", status_code=202)
     def submit_evaluation(req: EvaluationRequest, response: Response,
-                          _: bool = Depends(require_service_token)) -> dict:
+                          _: bool = Depends(require_writer)) -> dict:  # M-E11: Bearer 或 admin 会话
         if req.check_type != "autotest":
             response.status_code = 400
             return {"ok": False, "error": f"check_type 仅支持 autotest（预留）: {req.check_type!r}"}
@@ -128,14 +171,14 @@ def create_app(service: AutotestService) -> FastAPI:
 
     @app.get("/atp/evaluations")
     def evaluation_list(limit: int = 50,
-                        _: bool = Depends(require_service_token)) -> dict:
+                        _: bool = Depends(require_reader)) -> dict:  # M-E11: Bearer 或会话
         """最近评测列表（M-E10 控制台数据面；ATP 本地运维端点，契约无需增补）。"""
         items = service.evaluations.list_recent(max(1, min(limit, 200)))
         return {"items": items}
 
     @app.get("/atp/evaluations/{job_id}")
     def evaluation_status(job_id: str, response: Response,
-                          _: bool = Depends(require_service_token)) -> dict:
+                          _: bool = Depends(require_reader)) -> dict:  # M-E11: Bearer 或会话
         row = service.evaluations.get_by_job_id(job_id)
         if row is None:
             response.status_code = 404
