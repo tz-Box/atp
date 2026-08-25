@@ -86,6 +86,14 @@ class EvaluationStore:
             row = conn.execute("SELECT * FROM evaluations WHERE job_id=?", (job_id,)).fetchone()
         return dict(row) if row else None
 
+    def list_recent(self, limit: int = 50) -> list[dict]:
+        """最近评测列表（created_at 倒序；M-E10 控制台/运维列表端点）。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM evaluations ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
     def update_terminal(self, cid: str, *, status: str, finished_at: str,
                         summary: Optional[str] = None, sha: Optional[str] = None) -> None:
         """评测结束回写终态（success/failure + summary，供回调与状态查询复用）。"""

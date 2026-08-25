@@ -13,9 +13,11 @@ import hmac
 import importlib.metadata
 import os
 import threading
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 import tzcomm
@@ -122,6 +124,13 @@ def create_app(service: AutotestService) -> FastAPI:
 
     # ---- v1.5 §4.8 状态查询与探活（M-E4；探活必须即时响应，不被 M-E5 串行队列阻塞）----
 
+    @app.get("/atp/evaluations")
+    def evaluation_list(limit: int = 50,
+                        _: bool = Depends(require_service_token)) -> dict:
+        """最近评测列表（M-E10 控制台数据面；ATP 本地运维端点，契约无需增补）。"""
+        items = service.evaluations.list_recent(max(1, min(limit, 200)))
+        return {"items": items}
+
     @app.get("/atp/evaluations/{job_id}")
     def evaluation_status(job_id: str, response: Response,
                           _: bool = Depends(require_service_token)) -> dict:
@@ -149,6 +158,12 @@ def create_app(service: AutotestService) -> FastAPI:
             "tzcomm": daemon.ok,
             "queue": service.queue_depth,
         }
+
+    # ---- M-E10 Web 控制台（单页静态 HTML；数据端点均有 Bearer，页面本身无敏感数据）----
+
+    @app.get("/console", response_class=HTMLResponse)
+    def console() -> str:
+        return (Path(__file__).with_name("console.html")).read_text(encoding="utf-8")
 
     return app
 

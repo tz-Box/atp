@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATP 控制台</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", monospace, sans-serif;
+         background: #0f1419; color: #d7dde4; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+           background: #161d26; border-bottom: 1px solid #2a3542; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .spacer { flex: 1; }
+  main { padding: 16px 20px; max-width: 1200px; margin: 0 auto; }
+  .card { background: #161d26; border: 1px solid #2a3542; border-radius: 8px;
+          padding: 14px 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+             color: #7f8b99; margin: 0 0 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .stat .k { font-size: 11px; color: #7f8b99; }
+  .stat .v { font-size: 20px; font-weight: 600; }
+  .ok { color: #4cc38a; } .bad { color: #f16a6a; } .warn { color: #e5c07b; } .dim { color: #7f8b99; }
+  input, select { background: #0f1419; border: 1px solid #2a3542; color: #d7dde4;
+                  border-radius: 5px; padding: 6px 9px; font: inherit; }
+  input:focus { outline: 1px solid #3d6fb4; }
+  button { background: #2563eb; border: 0; color: #fff; border-radius: 5px;
+           padding: 6px 14px; font: inherit; cursor: pointer; }
+  button:disabled { background: #334155; cursor: default; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: #7f8b99; font-weight: 500; padding: 6px 8px;
+       border-bottom: 1px solid #2a3542; white-space: nowrap; }
+  td { padding: 6px 8px; border-bottom: 1px solid #1e2833; vertical-align: top; }
+  tr.row { cursor: pointer; } tr.row:hover td { background: #1a2330; }
+  tr.detail td { background: #121922; font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; }
+  .pill.success { background: #143526; color: #4cc38a; }
+  .pill.failure { background: #3a1d1d; color: #f16a6a; }
+  .pill.running { background: #3a3018; color: #e5c07b; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  form .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #7f8b99; }
+  form label.ck { flex-direction: row; align-items: center; gap: 6px; margin-top: 18px; }
+  #msg { font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 3px 10px; }
+  .kv div:nth-child(odd) { color: #7f8b99; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ATP 控制台</h1><span id="hdr-ver" class="dim"></span>
+  <div class="spacer"></div>
+  <input id="tok" type="password" placeholder="ATP_SERVICE_TOKEN" size="28">
+  <button id="tok-save">保存</button>
+  <label style="font-size:12px;color:#7f8b99"><input type="checkbox" id="auto" checked> 自动刷新</label>
+</header>
+<main>
+  <div class="card"><h2>健康</h2>
+    <div class="grid">
+      <div class="stat"><div class="k">状态</div><div class="v" id="h-ok">-</div></div>
+      <div class="stat"><div class="k">版本</div><div class="v" id="h-ver">-</div></div>
+      <div class="stat"><div class="k">tzcomm</div><div class="v" id="h-tz">-</div></div>
+      <div class="stat"><div class="k">排队深度</div><div class="v" id="h-q">-</div></div>
+    </div>
+  </div>
+
+  <div class="card"><h2>手动触发评测</h2>
+    <form id="f-submit">
+      <div class="row">
+        <label>repo（本地路径 / git URL / owner/repo）<input id="s-repo" size="34" required placeholder="owner/repo"></label>
+        <label>ref<input id="s-ref" size="20" placeholder="refs/heads/main"></label>
+        <label>scenario（可选）<input id="s-scn" size="16" placeholder="scenario.yaml"></label>
+        <label>correlation_id（可选）<input id="s-cid" size="22" placeholder="chk_manual_<ts>"></label>
+        <label class="ck"><input type="checkbox" id="s-base"> save_baseline</label>
+        <label class="ck"><button type="submit" id="s-go">提交</button></label>
+      </div>
+    </form>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card"><h2>评测列表（最近 50）</h2>
+    <table>
+      <thead><tr><th>创建时间</th><th>job_id</th><th>repo@ref</th><th>状态</th><th>summary</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="dim">加载中…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const tokInput = $("tok");
+tokInput.value = localStorage.getItem("atp_token") || "";
+$("tok-save").onclick = () => { localStorage.setItem("atp_token", tokInput.value.trim()); refresh(); };
+const auth = () => ({ "Authorization": "Bearer " + (localStorage.getItem("atp_token") || "") });
+
+async function jget(url, opt) {
+  const r = await fetch(url, opt);
+  if (r.status === 401) throw "401 未认证：请先在右上角填入 token";
+  if (r.status === 503) throw "503 端点未启用：服务端未配置 ATP_SERVICE_TOKEN";
+  return r;
+}
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const short = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n) + "…" : s; };
+let openJob = null;
+
+async function refreshHealth() {
+  try {
+    const h = await (await fetch("/atp/health")).json();
+    $("h-ok").textContent = h.ok ? "ok" : "down";
+    $("h-ok").className = "v " + (h.ok ? "ok" : "bad");
+    $("h-ver").textContent = h.version ?? "-";
+    $("hdr-ver").textContent = "v" + (h.version ?? "?");
+    $("h-tz").textContent = h.tzcomm ? "ok" : "down";
+    $("h-tz").className = "v " + (h.tzcomm ? "ok" : "bad");
+    $("h-q").textContent = h.queue ?? 0;
+    $("h-q").className = "v " + (h.queue > 0 ? "warn" : "");
+  } catch (e) { $("h-ok").textContent = "unreachable"; $("h-ok").className = "v bad"; }
+}
+
+async function refreshList() {
+  const tb = $("rows");
+  try {
+    const r = await jget("/atp/evaluations?limit=50", { headers: auth() });
+    const { items } = await r.json();
+    if (!items.length) { tb.innerHTML = '<tr><td colspan="5" class="dim">暂无评测记录</td></tr>'; return; }
+    tb.innerHTML = "";
+    for (const it of items) {
+      const tr = document.createElement("tr");
+      tr.className = "row";
+      tr.innerHTML = `<td class="mono">${esc(it.created_at)}</td>
+        <td class="mono">${esc(short(it.job_id, 22))}</td>
+        <td class="mono">${esc(short(it.repo, 30))}${it.ref ? "@" + esc(short(it.ref, 18)) : ""}</td>
+        <td><span class="pill ${esc(it.status)}">${esc(it.status)}</span></td>
+        <td>${esc(short(it.summary || (it.callback_error ? "回调失败: " + it.callback_error : ""), 60))}</td>`;
+      tr.onclick = () => toggleDetail(it, tr);
+      tb.appendChild(tr);
+      if (openJob === it.job_id) renderDetail(it, tr);
+    }
+  } catch (e) { tb.innerHTML = `<tr><td colspan="5" class="bad">${esc(e)}</td></tr>`; }
+}
+
+function toggleDetail(it, tr) {
+  openJob = openJob === it.job_id ? null : it.job_id;
+  refreshList();
+}
+function renderDetail(it, tr) {
+  const d = document.createElement("tr");
+  d.className = "detail";
+  d.innerHTML = `<td colspan="5"><div class="kv">
+    <div>correlation_id</div><div class="mono">${esc(it.cid)}</div>
+    <div>sha</div><div class="mono">${esc(it.sha || "-")}</div>
+    <div>scenario</div><div class="mono">${esc(it.scenario || "scenario.yaml")}</div>
+    <div>save_baseline</div><div>${it.save_baseline ? "true" : "false"}</div>
+    <div>finished_at</div><div class="mono">${esc(it.finished_at || "-")}</div>
+    <div>callback_error</div><div class="${it.callback_error ? "bad" : ""}">${esc(it.callback_error || "-")}</div>
+    <div>summary</div><div>${esc(it.summary || "-")}</div></div></td>`;
+  tr.after(d);
+}
+
+$("f-submit").onsubmit = async ev => {
+  ev.preventDefault();
+  const btn = $("s-go"), msg = $("msg");
+  btn.disabled = true; msg.className = "dim"; msg.textContent = "提交中…";
+  const body = {
+    correlation_id: $("s-cid").value.trim() || ("chk_manual_" + new Date().toISOString().replace(/[-:.T]/g, "").slice(0, 14)),
+    repo: $("s-repo").value.trim(),
+  };
+  if ($("s-ref").value.trim()) body.ref = $("s-ref").value.trim();
+  if ($("s-scn").value.trim()) body.scenario = $("s-scn").value.trim();
+  if ($("s-base").checked) body.save_baseline = true;
+  try {
+    const r = await jget("/atp/evaluations", { method: "POST", headers: { ...auth(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const b = await r.json();
+    if (r.ok && b.ok) {
+      msg.className = "ok";
+      msg.textContent = b.duplicate ? `重复提交（幂等）：原 job ${b.job_id}` : `已受理：${b.job_id}  sha=${b.sha || "-"}`;
+    } else { msg.className = "bad"; msg.textContent = `失败 ${r.status}: ${b.error || JSON.stringify(b)}`; }
+  } catch (e) { msg.className = "bad"; msg.textContent = String(e); }
+  btn.disabled = false;
+  refreshList();
+};
+
+function refresh() { refreshHealth(); refreshList(); }
+refresh();
+setInterval(() => { if ($("auto").checked) refresh(); }, 5000);
+</script>
+</body>
+</html>

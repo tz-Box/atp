@@ -271,3 +271,50 @@ def test_atp_health_tzcomm_unreachable_degrades(env, monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["ok"] is False
     assert resp.json()["tzcomm"] is False
+
+
+# ---- M-E10 列表端点与 Web 控制台 ----
+
+def test_evaluation_list_auth_required(env):
+    _, _, _, client = env
+    assert client.get("/atp/evaluations").status_code == 401
+    assert client.get("/atp/evaluations", headers={"Authorization": "Bearer nope"}).status_code == 401
+
+
+def test_evaluation_list_recent_order_and_fields(env):
+    _, store, _, client = env
+    assert client.get("/atp/evaluations", headers=_auth()).json() == {"items": []}
+    store.create(cid="c1", job_id="j1", repo="/r/a", ref="main", sha="aaa")
+    store.create(cid="c2", job_id="j2", repo="/r/b", ref=None, sha=None, save_baseline=True)
+    store.update_terminal("c1", status="failure", summary="1/2 passed",
+                          finished_at="2026-08-25 13:00:00")
+    store.set_callback_error("c1", "连接拒绝")
+    resp = client.get("/atp/evaluations", headers=_auth())
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 2
+    assert items[0]["job_id"] == "j2"  # 新→旧倒序
+    assert items[1]["job_id"] == "j1"
+    j1 = items[1]
+    assert j1["status"] == "failure" and j1["summary"] == "1/2 passed"
+    assert j1["callback_error"] == "连接拒绝" and j1["sha"] == "aaa"
+    assert j1["finished_at"] == "2026-08-25 13:00:00"
+    assert items[0]["save_baseline"] == 1
+
+
+def test_evaluation_list_limit(env):
+    _, store, _, client = env
+    for i in range(5):
+        store.create(cid=f"c{i}", job_id=f"j{i}", repo="/r", ref=None, sha=None)
+    items = client.get("/atp/evaluations?limit=2", headers=_auth()).json()["items"]
+    assert [it["job_id"] for it in items] == ["j4", "j3"]
+    # 上限截断（>200 不报错）
+    assert client.get("/atp/evaluations?limit=999", headers=_auth()).status_code == 200
+
+
+def test_console_served_without_auth(env):
+    _, _, _, client = env
+    resp = client.get("/console")  # 页面本身无认证（数据端点均有 Bearer）
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "ATP 控制台" in resp.text
