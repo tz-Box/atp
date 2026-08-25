@@ -318,3 +318,28 @@ def test_console_served_without_auth(env):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/html")
     assert "ATP 控制台" in resp.text
+
+
+# ---- M-E9a 能力自报 ----
+
+def test_capabilities_fields(env):
+    _, _, _, client = env
+    resp = client.get("/atp/capabilities")  # 无认证（Hub 探活采集）
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {"version", "plugins", "bodies", "resources", "queue"}
+    assert "ctrl.invp" in body["plugins"]  # 扫描仓内 plugins/ 目录（静态事实）
+    assert "pipe.slam" in body["plugins"]
+    assert "invp_sim" in body["bodies"]    # body/*.yaml stem
+    assert set(body["resources"]) == {"gpu", "sensors"}
+    assert isinstance(body["resources"]["gpu"], bool)
+    assert body["queue"] == 0
+
+
+def test_available_scan_units():
+    from autotest.registry import available_bodies, available_plugins
+    plugins = available_plugins()
+    assert plugins == sorted(plugins) and "ctrl.invp" in plugins
+    assert "__init__" not in plugins  # 仅含 __init__.py 的目录名（插件命名空间）
+    bodies = available_bodies()
+    assert "invp_sim" in bodies and all("." not in b for b in bodies)

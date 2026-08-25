@@ -12,6 +12,7 @@ from __future__ import annotations
 import hmac
 import importlib.metadata
 import os
+import shutil
 import threading
 from pathlib import Path
 from typing import Any, Optional
@@ -23,6 +24,7 @@ from pydantic import BaseModel, Field
 import tzcomm
 
 from ..commcheck import check_daemon
+from ..registry import available_bodies, available_plugins
 from .server import AutotestService
 
 DEFAULT_HTTP_PORT = 2335
@@ -156,6 +158,21 @@ def create_app(service: AutotestService) -> FastAPI:
             "ok": daemon.ok,
             "version": _atp_version(),
             "tzcomm": daemon.ok,
+            "queue": service.queue_depth,
+        }
+
+    @app.get("/atp/capabilities")
+    def atp_capabilities() -> dict:
+        """能力自报（M-E9a，无认证）：Hub 探活时采集，支撑 repo↔ATP 绑定管理面。
+
+        plugins/bodies 扫描仓内目录（registry.available_*，静态事实，不受按需加载影响）；
+        resources 为本机资源标签（gpu 经 nvidia-smi 探测；sensors 真机差异，预留配置声明）。
+        """
+        return {
+            "version": _atp_version(),
+            "plugins": available_plugins(),
+            "bodies": available_bodies(),
+            "resources": {"gpu": shutil.which("nvidia-smi") is not None, "sensors": []},
             "queue": service.queue_depth,
         }
 

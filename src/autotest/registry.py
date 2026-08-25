@@ -89,6 +89,26 @@ def list_plugins() -> dict[str, list[str]]:
     }
 
 
+def available_plugins() -> list[str]:
+    """仓内可用插件命名空间（扫描 plugins/ 目录，未加载也可见）。
+
+    插件按需 load_plugin 才注册，服务启动时注册表为空；capabilities 自报（M-E9a）
+    需要的是"本 ATP 能跑什么"的静态事实，故直接扫目录。
+    """
+    if not _PLUGIN_ROOT.is_dir():
+        return []
+    return sorted(p.name for p in _PLUGIN_ROOT.iterdir()
+                  if p.is_dir() and (p / "__init__.py").is_file())
+
+
+def available_bodies() -> list[str]:
+    """仓内可用本体台架（body/*.yaml 的 stem，即 scenario.yaml `body:` 引用键）。"""
+    body_root = _PLUGIN_ROOT.parent / "body"
+    if not body_root.is_dir():
+        return []
+    return sorted(p.stem for p in body_root.glob("*.yaml"))
+
+
 def validate_produces_consumes(
     checker_consumes: list[str],
     dataset_produces: list[str],
