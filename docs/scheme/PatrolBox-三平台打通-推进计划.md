@@ -205,8 +205,9 @@
 - [ ] **M-E6 联调(Hub 调度模块已基本实现,待 O1/O2/O3+Hub 阻断项后启动)**:cicd_test 真实 push → Hub 编排 → 直连 ATP → 倒立摆评测 →
   回调归位(或轮询兜底)→ check-runs 回写 PR → PMS 落卡 + 飞书(失败);**与 Hub N1b 联合 E2E 合并**(同一 PR 生命周期);
   另覆盖通路3(mannultest 分支手动测试)与通路2/4(均已具备条件,一并验收)
-- [ ] **M-E7 文档**:部署文档补 deploy key/workspace/atp.service_token/hub.callback_* 配置;
-  《算法测试接入手册》CI 章节改直连版(GHA workflow 标注为自测备选);《使用指南》§8 同步;契约 §14 纪律回写(v1.2 已先行一轮)
+- [x] **M-E7 文档**(2026-08-25 收口):部署文档=deploy/autotest.service 头部注释(X3 三件套/workspace/deploy key 已全);
+  《使用指南》§8 整节重写为 v1.5 直连版(触发模型/前置条件/部署步骤/流程/HTTP 面端点表含 capabilities+console/
+  手动触发排障/GHA 降级 §8.7 自测备选);《算法测试接入手册》§3.8 同步;契约 §14 纪律回写(v1.2 已先行一轮)
 - [x] **M-E8 ATP HTTP client**(2026-08-25 增补立项,同日收口):手动触发测试与联调自验工具——
   `python3 -m autotest.client atp health/submit/status/wait`(挂现有 client CLI,与 tzcomm 面 run/matrix 并列)
   - urllib 零新依赖;ATP_BASE_URL(缺省 http://127.0.0.1:2335)/ATP_SERVICE_TOKEN 两 env;
@@ -216,20 +217,22 @@
 - [ ] **M-E9 test service 注册与发现**(2026-08-25 增补立项,回应 M"repo→ATP 绑定管理"需求;**契约 v1.5 无此章节,属新规划**):
   现状 = Hub 静态 config `atp_pool.{atps,routes}` 人工维护;算法测试特殊性(插件依赖如 ctrl.invp、本体台架
   invp_sim 纯仿真/真机、资源差异 GPU/传感器)决定不同 ATP 能力不同,绑定关系需管理面而非手改配置
-  - M-E9a(ATP 侧,本仓):`GET /atp/capabilities`(并入 health 或独立端点,无认证)——
-    `{version, plugins: [...](registry 实取), bodies: [...], resources: {gpu, sensors}, queue}`;能力自报单一事实源
+  - [x] M-E9a(ATP 侧,本仓)**已收口(2026-08-25)**:`GET /atp/capabilities`(独立端点,无认证)——
+    `{version, plugins, bodies, resources:{gpu(nvidia-smi 探测), sensors:[]}, queue}`;
+    registry.available_plugins/available_bodies 扫描仓内目录(静态事实,不受按需加载影响);单测 +2,真机验证 4 插件/4 本体
   - M-E9b(Hub 侧,同事):探活时采集 capabilities 入健康快照 + console ATP 面板展示(V9);
     routes 管理 API + console 表单(替代手改 config.json;对齐"配置走界面"纪律)
   - M-E9c(绑定数据源,后续):算法 repo 库登记归 PMS(repo↔项目绑定已有,扩展 check_type/需求标签),
     Hub 从 PMS pull 生成 routes;远期能力自动匹配(manifest consumes/scenario 需求 vs ATP capabilities)
   - 不阻塞 M-E6:链路验证用 L0 静态 routes 即可
-- [ ] **M-E10 ATP Web 控制台**(2026-08-25 增补立项,回应 M"client 可视化"需求;域名 atp.turing-zero.com 已 nginx→2335):
+- [x] **M-E10 ATP Web 控制台**(2026-08-25 增补立项,同日收口;回应 M"client 可视化"需求;域名 atp.turing-zero.com 已 nginx→2335):
   单页静态 HTML 挂 FastAPI `/console`(零前端构建、零新依赖);页面 token 输入存 localStorage,fetch 带 Bearer
-  - 数据面:现有 `/atp/health` + **新增 `GET /atp/evaluations` 列表端点**(evaluations SQLite 表 SELECT,
-    ATP 本地运维端点,契约无需增补) + 现有按 job_id 查询(详情展开)
-  - 功能:健康卡(version/tzcomm/queue)、评测列表(状态/sha/summary/finished_at 可展开)、
-    手动触发表单(repo/ref/save_baseline → POST /atp/evaluations,即 M-E8 client 的网页形态)、轮询自动刷新
+  - 数据面:`/atp/health` + **新增 `GET /atp/evaluations` 列表端点**(evaluations.list_recent,created_at 倒序,
+    limit≤200,Bearer 认证) + 现有按 job_id 查询(详情展开)
+  - 功能:健康卡(version/tzcomm/queue)、评测列表(状态/sha/summary/finished_at 可展开,含 callback_error 留痕)、
+    手动触发表单(repo/ref/scenario/save_baseline,cid 缺省 chk_manual_<ts> 幂等)、5s 自动刷新
   - 边界:ATP console = 单机执行面运维视图(本机排队/结果/手动触发);Hub console(V9 ATP 面板)= 池化调度视图,不重复建设
+  - **验收**:单测 +5(认证/倒序字段/limit/页面无认证);真机 health/console 200/列表真实记录/无认证 401
 
 #### 批次 E 建议开工顺序(本仓内,不依赖外部)
 
