@@ -202,9 +202,13 @@
     `/api/command`(pause/step/resume)与 `/health` 不受队列阻塞
   - 影响:test_service_parallel_jobs 等存量并行语义测试改为验证排队语义
   - **验收**:并发提交 2 个评测 → 串行执行、顺序可证;pytest 全绿
-- [ ] **M-E6 联调(Hub 调度模块已基本实现,待 O1/O2/O3+Hub 阻断项后启动)**:cicd_test 真实 push → Hub 编排 → 直连 ATP → 倒立摆评测 →
+- [ ] **M-E6 联调(主负责方评估为 cicd-hub,2026-08-25 晚探活确认:链路编排/归位/验收标准均在 Hub 侧,ATP 为被动执行面)**:
+  cicd_test 真实 push → Hub 编排 → 直连 ATP → 倒立摆评测 →
   回调归位(或轮询兜底)→ check-runs 回写 PR → PMS 落卡 + 飞书(失败);**与 Hub N1b 联合 E2E 合并**(同一 PR 生命周期);
-  另覆盖通路3(mannultest 分支手动测试)与通路2/4(均已具备条件,一并验收)
+  另覆盖通路3(mannultest 分支手动测试)与通路2/4(均已具备条件,一并验收)。
+  **联调环境事实(2026-08-25 晚)**:Hub(2334)+ATP(2335)本机同机,最小完备;
+  Hub atp_pool 已配 atp-local→tz-box/cicd_test(dev token 一致);O2 deploy key 实质就绪(cicd_test 真机 checkout+评测 success);
+  **唯一硬卡点**:Hub config.json callback_token 为空(callback 端点实测 401)→ Hub 配 token 重启 + ATP atp.env 写 HUB_CALLBACK_* 即闭环
 - [x] **M-E7 文档**(2026-08-25 收口):部署文档=deploy/autotest.service 头部注释(X3 三件套/workspace/deploy key 已全);
   《使用指南》§8 整节重写为 v1.5 直连版(触发模型/前置条件/部署步骤/流程/HTTP 面端点表含 capabilities+console/
   手动触发排障/GHA 降级 §8.7 自测备选);《算法测试接入手册》§3.8 同步;契约 §14 纪律回写(v1.2 已先行一轮)
