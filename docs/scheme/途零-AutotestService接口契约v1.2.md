@@ -1,4 +1,4 @@
-# 途零 · Autotest Service 接口契约(v1.1 · 重构版 · 待评审)
+# 途零 · Autotest Service 接口契约(v1.2 · 2026-08-25 回写 · 待 M 评审)
 
 > 本文档定义 Patrol Box **统一自动化测试服务(autotest service)**的架构与接口契约。
 > **v1.0 → v1.1 三项结构性修订(2026-08-18 评审反馈)**:
@@ -7,7 +7,19 @@
 > ③ **本体 profile**:urdf/传感器布局独立成注册资产,场景显式引用(§8)。
 > 另:联合测试 suite 立为扩展点(§12)。
 >
-> 定位、两种评测模式、时钟/RESET 语义、tzcomm 传输、Client/CI 边界**沿用 v1.0**,本文档为完整替代版。
+> **v1.1 → v1.2 修订(2026-08-25,按 §14-3"以实现为事实源回写" + 承接总契约 v1.5)**:
+> ④ **§3.3 部署约束回写 tzcomm 实现现实**(UDP 单播点对点,非组播;心跳 1s/5s 清理),并承接总契约 v1.5 澄清:
+>    同机约束管 tzcomm **数据面**,ATP **HTTP 面(:2335)不受此限**,Hub 跨机直连 HTTP 面合法。
+> ⑤ **§5.2 INIT payload 回写实现**:本体下发键为 `body_profile`(`{body_name, body_version, sensor_config}`),非 v1.1 写的 `body`。
+> ⑥ **§7.1 插件文件名回写实现**:单数 `data.py` / `dataset.py` / `checker.py` / `sim.py`(v1.1 误写复数);
+>    §7.4/§9 示例中残留的 `module` 键同步删除(module 去常量化 v1.1 已冻结,示例未跟上)。
+> ⑦ **§10 Client 补全批次 B/D 增量**:pause/step/resume 调试命令、`run --json` 携带 job_id、
+>    `report --json` 机读回归对比、`report --save-baseline` 滚动基线、HTTP 运维面(:2335)。
+> ⑧ **§11 CI/CD 整节重写(总契约 v1.5 §4.3/§4.8)**:autotest 执行载体由 workflow_dispatch/runner
+>    切换为 **Hub 直连 ATP HTTP 面**;ATP 评测完成**主动回调** Hub;GHA workflow 降级为算法仓自测备选。
+> ⑨ **§13 批次表更新**:批次 D 收口;批次 E 改向为"v1.5 ATP HTTP 面补全"(原 suite/enc=pb 顺延为 F)。
+>
+> 定位、两种评测模式、时钟/RESET 语义、tzcomm 传输**沿用 v1.0/v1.1**,本文档为完整替代版。
 
 ---
 
@@ -74,10 +86,14 @@
 
 ### 3.3 部署约束(硬性)
 
-1. UDP 组播 TTL=1、docker 桥接网络不通组播 → SUT 容器必须 `--network host`;跨机数据面一律 qos=1 TCP。
+1. tzcomm 数据面为 **UDP 单播点对点**(qos=0)与 TCP(qos=1);SUT 容器必须 `--network host`(与本机 daemon 及数据面对端互通);跨机数据面一律 qos=1 TCP。
+   (回写注记:v1.1 原文"UDP 组播 TTL=1"为 tzcomm 早期文档过期描述,现实现为单播,结论 `--network host` 不变。)
 2. Redis + tzcomm daemon 随评测宿主机常驻(systemd);业务进程只连 daemon,**禁止直连 Redis**。
-3. 节点 5s 心跳、15s 清理——SUT 崩溃由 daemon 发现,Service 据此判失败。
-4. 评测执行面(Redis/daemon/server/runner/SUT)同机;Hub/PMS 在管理面机器,**不感知 tzcomm**,唯一跨机接口是 workflow 回调(§11)。
+3. 节点 1s 心跳、5s 无心跳清理(以 tzcomm `config.py` 现行默认值为准)——SUT 崩溃由 daemon 发现,Service 据此判失败。
+4. 评测执行面(Redis/daemon/server/SUT)同机;Hub/PMS 在管理面机器,**不感知 tzcomm**。
+   **v1.5 澄清(承接总契约 §2)**:该约束管 **tzcomm 数据面**;ATP 的 **HTTP 面(:2335,§11)不受此限**,
+   Hub 跨机直连 HTTP 面合法——评测装配/SUT 拉起/tzcomm 交互全部发生在 ATP 本机内部,约束语义完整保持。
+   纪律:**Hub 永不跨机调 autotest client/tzcomm/Redis**;一切评测触发经"Hub→ATP HTTP 面(§11)"这条路。
 
 ---
 
@@ -125,14 +141,17 @@ schema 内加字段 → `v` 不变(消费者忽略未知键);改语义/删字段
 
 | type | 方向 | 通道 | payload | 响应 |
 |---|---|---|---|---|
-| `init` | Svc→SUT | ctl | `{sensor_config, body, hyperparams}` | `ready` |
+| `init` | Svc→SUT | ctl | `{sensor_config, hyperparams, ...(场景/CLI 配置), body_profile?}` | `ready` |
 | `ready` | SUT→Svc | ctl 响应 | `{module, version, required_sensors}` | — |
 | `reset` | Svc→SUT | ctl | `{testcase_id}` | `reset_ack{ok}` |
 | `step` | Svc→SUT | obs | `{done, observation}` | 异步 `result`/`action` |
 | `result` / `action` | SUT→Svc | result/action | `{module, data(§4.2)}` | — |
 | `terminate` | Svc→SUT | ctl | `{reason}` | `final{self_stats}` |
 
-**握手校验(本版强化)**:`init.sensor_config` = `{类型: {实例名: topic}}`,实例名与 §8 本体声明对齐;`ready.required_sensors` 缺实例 → fail fast 终止评测。`init.body` 下发本体 profile(§8),SUT 据此获得传感器外参等。
+**握手校验(本版强化)**:`init.sensor_config` = `{类型: {实例名: topic}}`,实例名与 §8 本体声明对齐;`ready.required_sensors` 缺实例 → fail fast 终止评测。
+**`init.body_profile`(v1.2 回写实现键名,v1.1 误写为 `body`)**:本体 profile 下发(§8),结构为
+`{body_name, body_version, sensor_config}`——sensor_config 由核心按 body 资产生成并同时合入 payload 顶层
+(供旧算法直读),SUT 据此获得传感器外参等。无 body 引用时该键缺省。
 
 ### 5.3 RESET 语义(冻结)
 
@@ -167,15 +186,18 @@ class IWorld(ABC):
 ### 7.1 插件包结构(目录约定)
 
 ```
-plugins/<命名空间>/            # 如 pipe.slam / nav2d / manip.force
+plugins/<命名空间>/            # 如 pipe.slam / nav2d / ctrl.invp / manip.force
 ├── contract.md              # 模块契约:数据 schema 字段级定义、指标与阈值、数据源清单、本体要求
 ├── data.py                  # register_data:observation/action/result 的 schema + decoder
-├── datasets.py              # register_dataset:dataset/sim/real 数据源工厂
-├── checkers.py              # register_checker:评判插件
-├── sim.py                   # 可选:闭环 SimWorld
+├── dataset.py               # register_dataset:dataset/real 数据源工厂(开环插件持有;闭环插件可省略)
+├── checker.py               # register_checker:评判插件
+├── sim.py                   # 可选:闭环 SimWorld(经 register_dataset 注册 "<ns>.sim" 仿真源)
 ├── scenarios/*.yaml         # 预置场景
+├── ( replay.py / convert.py )  # 可选:插件自数据工具(如 pipe.slam 的 bag 回放/转换)
 └── proto/*.proto            # 可选:跨语言 schema(enc=pb 时必填)
 ```
+
+(v1.2 回写:v1.1 误写复数 `datasets.py`/`checkers.py`,实现一律单数;现有插件矩阵 = pipe.slam 开环 + nav2d/ctrl.invp/manip.force 三闭环。)
 
 ### 7.2 注册与归属校验
 
@@ -192,14 +214,17 @@ plugins/<命名空间>/            # 如 pipe.slam / nav2d / manip.force
 算法仓库根目录放 manifest `scenario.yaml`,二选一实现协议:原生 tzcomm(读 `AUTOTEST_SESSION`/`AUTOTEST_TOPICS`)或 SutBase SDK(覆写 `on_init/on_reset/on_step/on_terminate`)。
 
 ```yaml
-module: pipe.slam            # 插件命名空间(必填)
-launch: "python3 main.py"    # 启动命令(算法根目录/容器 /workspace 执行)
+launch: "python3 main.py"    # 启动命令(算法根目录/容器 /workspace 执行),必填
+consumes: [pipe.slam.SlamObs]  # 算法消费的数据 schema 列表(命名空间键;produces⊇consumes 归属校验的算法侧输入)
 scenario: <路径>             # 可选,建议场景
 required_sensors: {lidar: [front, rear]}   # 与本体实例名对齐
 hyperparams: {...}           # 经 INIT 下发
 image: <镜像名>              # 可选,docker+bind
 output_topic: <topic>        # 可选,ROS 侧自有产物
 ```
+
+(v1.2 回写:v1.1 示例中的 `module: <命名空间> # 必填` 已随"module 去常量化"从实现移除——算法归属改由
+`consumes` 列表 + 场景命名空间键确立,manifest 写 `module` 键会被静默忽略。)
 
 ### 7.5 ROS2 算法接入(bridge 范式)
 
@@ -233,35 +258,61 @@ sensors:                        # 实例名 → 布局(与 sensor_config / requi
 ## 9. 场景配置(核心格式,冻结)
 
 ```yaml
-module: pipe.slam             # 插件命名空间
-body: pbox_v1                 # 本体 profile 引用(必填)
+body: pbox_v1                 # 本体 profile 引用(必填,缺失即报错)
 dataset:
-  type: pipe.slam.rosbag      # 带命名空间的数据源名
+  type: pipe.slam.rosbag      # 带命名空间的数据源名(场景不再写 module;归属经命名空间键 + produces⊇consumes 校验)
   config: {root: ..., topic_map: {...}, gt_dir: ..., max_frames: 5000}
 checker: pipe.slam.ape        # 可省略(=数据流验证)
 checker_config: {...}         # 阈值覆盖
+sensor_config: {lidar: {front: /points_raw}}   # 可选,覆盖 body 派生值,经 INIT 下发
 hyperparams: {...}            # 算法超参,经 INIT 下发
 ```
 
+(v1.2 回写:v1.1 示例首行 `module: pipe.slam` 已随 module 去常量化移除,场景实现字段以 `scenario.py` 为准。)
+
 ---
 
-## 10. Client 控制接口(沿用 v1.0,冻结)
+## 10. Client 控制接口(v1.2 补全批次 B/D 增量)
 
-- `autotest/control` 提交:`{manifest, scenario?, checker?, checker_config?, clock_rate?}` → `{job_id}`;`autotest/job/status` 轮询 → `{status, results, error}`。
-- CLI:`run / matrix / report`;`--json` 供 CI;失败也写 report.json。
+- `autotest/control` 提交:`{manifest, scenario?, checker?, checker_config?, clock_rate?}` → `{job_id}`;`autotest/job/status` 轮询 → `{status, results, error, run_state?, frames?}`。
+- **调试命令(批次 B 新增)**:control 服务接受 `pause / step(n) / resume`——RunControl 帧级闸门(pause 停喂帧时钟冻结、step 暂停中配额放行 n 帧、resume 清残余配额);仅数据帧过闸,终止帧直达。
+- CLI:`run / matrix / report / pause / step / resume`;`--json` 供 CI——**`run --json` 输出携带 `job_id`**(批次 D);**`report --json` 机读回归对比** `{has_baseline, changes{improved/regressed/worse/new/same}, rows}`(批次 D);失败也写 report.json。
 - matrix:`algorithms:` 条目列表(manifest + 可选覆盖),逐条提交聚合;同算法跨 testcase RESET 复用,多版本对比走多条目。
-- 留痕:`artifacts/{job_id}/{report.json, session.log}`;回归:基线按 testcase 对齐逐指标对比(指标越小越好,passed 翻转优先判 improved/regressed)。
+- 留痕:`artifacts/{job_id}/{report.json, session.log}`;回归:基线按 testcase 对齐逐指标对比(指标越小越好,passed 翻转优先判 improved/regressed,指标恶化未翻转记 worse);**`report --save-baseline` 滚动 `artifacts/baseline.json`**(批次 D;CI 语义=先对比后滚动)。
+- **HTTP 运维面(批次 D 新增,:2335,FastAPI)**,与 tzcomm 面共享 Jobs 池:
+  `GET /health`、`POST /api/submit`(等价 control 提交)、`POST /api/command`(pause/step/resume)、`GET /api/jobs/{job_id}`。
+  **v1.5:总契约 §4.8 的 ATP 对外端点在本面上扩展(见 §11)。**
 
 ---
 
-## 11. CI/CD 对接(沿用 v1.0 + 总契约修订)
+## 11. CI/CD 对接(v1.2 整节重写:总契约 v1.5 §4.3/§4.8)
 
-- 现状:~~分支 push(`autotest`/`mannultest*`)或 dispatch~~ → runner 上 `client run --json` → report.py 回调 Hub。
-  **D3 已拍板(v1.3 §4.3)**:push 分支监听已废弃,触发一律为 Hub `workflow_dispatch`(通路1 自动/通路3 手动);
-  report.py 不再发 Issue/webhook,唯一出口是 Hub `/api/ci/callback`(Bearer,env `HUB_CALLBACK_URL`/`HUB_CALLBACK_TOKEN`)。
-- Hub 编排(Hub Phase 0/1):workflow_dispatch 入参 `correlation_id`/`check_type`;末步 POST Hub `/api/ci/callback`(Bearer)。
-- **本版修订(承接总契约评审)**:**回调必须携带实际 checkout 的 `sha`**、`conclusion`、`finished_at`(手动通路下触发时 sha 不定,不补则 PMS 按 sha 查询链断裂);手动测试分支约定为 `mannultest/*` 前缀(可 per-user/per-run),不锁定单一 `mannultest` 分支。
-- autotest 本体不因 Hub 改动;对 Hub 只暴露 workflow 回调一个应用层接口。
+- **执行载体(v1.5 定案)**:autotest 检查的触发由"Hub→GitHub `workflow_dispatch`→self-hosted runner→本机 client"
+  切换为 **Hub 直连 ATP server HTTP 面**;self-hosted runner 从评测通路移除,GitHub 在 autotest 通路上只保留
+  **事件源**(webhook)与**展示板**(Hub check-runs 回写)两角色。
+  `examples/ci/autotest.yml` + `examples/ci/report.py` 降级为**算法仓 GHA 自测备选路径**(主通路不再分发)。
+- **ATP HTTP 面(总契约 §4.8;本契约承接为 ATP 侧权威实现约束,默认 :2335,systemd 常驻)**:
+  - **`POST /atp/evaluations`** — Bearer `atp.service_token` 认证(未知/错误 → 401);收
+    `{correlation_id, repo, ref, sha?, check_type, scenario?, save_baseline, pms_task_id?}`;
+    `202 {ok, job_id, sha}`;**同 cid 幂等** → `200 {ok, duplicate:true, job_id:<原job>}`,不重复执行;
+    校验失败(token/repo 或 ref 不可达/manifest 缺失)→ `4xx {ok:false, error}`(Hub 据此直接判 failure 免等超时)。
+  - **代码准备(定死)**:ATP 在本机 workspace 按 `repo+ref` checkout(每评测机预置 GitHub 只读凭证,如 deploy key;
+    凭证管理为部署细节);评测内容定义(manifest/场景/判分)全部来自该 checkout 的仓库内容——**Hub 不传递评测逻辑,只传递坐标**。
+  - **`GET /atp/evaluations/{job_id}`** — `{job_id, status: running|success|failure, sha, report:{summary, run_url}, finished_at?}`;
+    Hub 轮询兜底用:终态响应若回调未达则视同回调归位。
+  - **`GET /atp/health`** — `{ok, version, tzcomm, queue}`;Hub 池化探活用(不可达 → Hub 路由跳过 + ci_alert)。
+  - **并发语义**:单 ATP **串行执行**(评测机资源独占),Hub 侧排队;多 ATP 池化 = Hub 把不同任务分发到不同 ATP,ATP 间互不感知。
+- **主动回调(本版修订,发起方由 workflow 末步脚本改为 ATP server)**:评测完成(含失败)ATP 自动 POST
+  Hub `/api/ci/callback`(Bearer `hub.callback_token`),报文沿用既有定义:
+  `{correlation_id, sha(实际 checkout,v1.2 必带), check_type:"autotest", conclusion, report:{summary, run_url?}, finished_at}`。
+  - `summary` 含基线回归计数 `vs_baseline`(如 `improved=1, regressed=2`;无基线时不带)。
+  - `run_url` 语义(v1.5):Hub console check 详情页;**该 URL 只有 Hub 知道,ATP 省略或置空**,由 Hub 归位时填充。
+  - 回调地址/token 为 ATP 侧**静态配置**(`hub.callback_url` / `hub.callback_token`,systemd Environment),不经 submit 传递;
+    所有 ATP 恒回调同一 Hub。回调失败重试并记 session.log(最终失败不丢结果——Hub 轮询兜底可拿回)。
+- **手动预提交测试(通路3)**:分支约定 `mannultest/<operator>/<ts>` 前缀族(职责=让 ATP 有代码可 checkout);
+  手动测试语义=**仅预验证、不作交付附件**。
+- **tzcomm 同机约束不变**(§3.3):Hub 永不跨机调 autotest client/tzcomm/Redis;一切评测触发经"Hub→ATP HTTP 面"。
+- autotest 内部(tzcomm/World/协议/checker/插件)**不因 Hub/PMS 改动**;§10 Client 维持为本机入口,GHA workflow 维持自测备选。
 
 ---
 
@@ -278,11 +329,12 @@ hyperparams: {...}            # 算法超参,经 INIT 下发
 
 | 批次 | 内容 | 状态/动作 |
 |---|---|---|
-| A | **收口+重构**:补 `protocol/data` 缺失包 → 核心去算法化(module 常量化移除、registry 命名空间、§4 schema 信封)→ `modules/` 迁 `plugins/`(pipe.slam、nav2d 两个插件包 + 各自 contract.md)→ body 机制 → 契约 v1.1 评审冻结 | 本版启动 |
+| A | **收口+重构**:补 `protocol/data` 缺失包 → 核心去算法化(module 常量化移除、registry 命名空间、§4 schema 信封)→ `modules/` 迁 `plugins/`(pipe.slam、nav2d 两个插件包 + 各自 contract.md)→ body 机制 → 契约 v1.1 评审冻结 | 已完成 |
 | B | nav 闭环验证;manip 插件(作为"新建插件流程"首个验证);暂停/单步 | **已完成**(nav2d/manip.force/ctrl.invp 三闭环插件收口,RunControl 暂停/单步,140+ 测试全绿;见推进计划批次 B) |
 | C | device action 下发回路(RealWorld 双向);body↔device 契约对齐;三源一致 | 待做(需 device 契约侧配合,不阻塞打通) |
-| D | Hub 对接(§11 修订后);baseline 接入 CI | 进行中(部署工程化 R5/R6 已落地;baseline 入 CI 的 ATP 侧已完成——`report --json`+`save_baseline`+回调摘要携带 vs_baseline,蓝本分发待 Hub 合并;见推进计划 M-D3) |
-| E | suite 联合测试;enc=pb + .proto(C++ 接入前) | 方向性 |
+| D | Hub 对接(§11 修订后);baseline 接入 CI;部署工程化 | **已完成(2026-08-23)**:R5 `pip install --user -e`(发行包名 tz_atp)/ R6 systemd 常驻(:2335);baseline 入 CI(`report --json` 机读对比 + `--save-baseline` 滚动 + 回调摘要携带 vs_baseline);runner 形态联调随 v1.5 勾销(资产保留复用) |
+| E | **v1.5 ATP HTTP 面补全(总契约 §4.8,2026-08-24 立项)**:`POST /atp/evaluations`(token 认证 + cid 幂等 + 202)、workspace checkout(repo 缓存 + worktree 隔离 + deploy key)、评测完成**主动回调** Hub(summary/vs_baseline 内化进 server)、`GET /atp/evaluations/{job_id}` + `/atp/health` 升级、单 ATP 串行语义、联调、文档 | **进行中**;详见推进计划批次 E(M-E1~M-E7) |
+| F | suite 联合测试;enc=pb + .proto(C++ 接入前) | 方向性(原批次 E 顺延) |
 
 ---
 
