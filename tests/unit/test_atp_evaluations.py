@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from autotest.manifest import is_scenario_path
 from autotest.server.checkout import CheckoutError, locate_manifest, resolve_checkout
 from autotest.server.evaluations import EvaluationStore, conclusion_of
 from autotest.server.http import create_app
@@ -35,16 +36,20 @@ class _FakeService:
         return 0
 
     def submit_evaluation(self, req: dict) -> dict:
+        # M-F2 形态分派（对齐真 service）：路径值 → manifest 相对路径；id/列表/None → 清单选择
+        raw = req.get("scenario")
+        scenario_path = raw if is_scenario_path(raw) else None
         try:
             repo_dir, sha = resolve_checkout(req["repo"], req.get("ref"))
-            manifest = locate_manifest(repo_dir, req.get("scenario"))
+            manifest = locate_manifest(repo_dir, scenario_path)
         except CheckoutError as exc:
             return {"error": str(exc)}
         self.submitted.append(str(manifest))
         job_id = f"autotest-fake{len(self.submitted):02d}"
         created = self._store.create(
             cid=req["correlation_id"], job_id=job_id, repo=req["repo"],
-            ref=req.get("ref"), sha=sha, scenario=req.get("scenario"),
+            ref=req.get("ref"), sha=sha,
+            scenario=(raw if isinstance(raw, str) or raw is None else ",".join(raw)),
             save_baseline=bool(req.get("save_baseline")), pms_task_id=req.get("pms_task_id"),
         )
         if not created:
@@ -171,6 +176,52 @@ def test_submit_scenario_override(env):
                        headers=_auth())
     assert resp.status_code == 202
     assert service.submitted == [str(repo / "ci" / "eval.yaml")]
+
+
+# ---- M-F2/M-F3 scenario 三态与机读错误码 ----
+
+def test_submit_scenario_id_and_list_accepted(env):
+    """scenario 为场景 id / id 列表 → 清单选择语义（不当路径解析），提交受理。"""
+    _, store, repo, client = env
+    resp = client.post("/atp/evaluations",
+                       json={"correlation_id": "c1", "repo": str(repo), "scenario": "fast"},
+                       headers=_auth())
+    assert resp.status_code == 202
+    assert store.get_by_cid("c1")["scenario"] == "fast"
+
+    resp = client.post("/atp/evaluations",
+                       json={"correlation_id": "c2", "repo": str(repo),
+                             "scenario": ["fast", "full"]},
+                       headers=_auth())
+    assert resp.status_code == 202
+    assert store.get_by_cid("c2")["scenario"] == "fast,full"
+
+
+def test_submit_scenario_wrong_type_422(env):
+    _, _, repo, client = env
+    resp = client.post("/atp/evaluations",
+                       json={"correlation_id": "c1", "repo": str(repo), "scenario": 123},
+                       headers=_auth())
+    assert resp.status_code == 422
+
+
+def test_submit_error_code_propagated(env):
+    """业务层机读错误码（scenario_unknown 等）透传到响应体，Hub 直判 failure。"""
+    class _UnknownScenario(_FakeService):
+        def submit_evaluation(self, req: dict) -> dict:
+            return {"error": "未知 scenario: nope（可用: fast, full）",
+                    "code": "scenario_unknown"}
+
+    _, _, repo, _ = env
+    client = TestClient(create_app(_UnknownScenario(EvaluationStore(repo.parent / "x.db"))))
+    resp = client.post("/atp/evaluations",
+                       json={"correlation_id": "c1", "repo": str(repo), "scenario": "nope"},
+                       headers=_auth())
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["code"] == "scenario_unknown"
+    assert "nope" in body["error"]
 
 
 # ---- checkout 单元 ----

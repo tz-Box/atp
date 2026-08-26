@@ -78,9 +78,16 @@ class DockerLauncher:
         return subprocess.Popen(docker_cmd)
 
 
-def launch_algorithm(manifest, session_id: str) -> subprocess.Popen:
-    """按 manifest 选择 Launcher 并拉起算法：有 image 走 docker+bind，否则宿主直启。"""
-    env = build_algo_env(session_id)
-    if manifest.image:
+def launch_algorithm(manifest, session_id: str,
+                     extra_env: Optional[dict] = None) -> subprocess.Popen:
+    """按 manifest 选择 Launcher 并拉起算法。
+
+    - runtime.type=host（缺省）且有旧字段 image → docker+bind（向后兼容）；
+    - runtime.type=venv → 宿主直启 + extra_env（PATH 前置 .atp-venv/bin，M-F4）；
+      runtime 声明存在时以 runtime 为准，旧 image 字段被忽略（schema §2）。
+    """
+    env = build_algo_env(session_id, extra_env=extra_env)
+    rtype = (manifest.runtime or {}).get("type", "host")
+    if rtype == "host" and manifest.image:
         return DockerLauncher().launch(manifest.image, manifest.launch, env, cwd=manifest.dir)
     return ProcessLauncher().launch(manifest.launch, env, cwd=manifest.dir)

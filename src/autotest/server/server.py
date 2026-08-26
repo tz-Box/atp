@@ -25,10 +25,11 @@ from ..commcheck import build_health
 from ..eval.closed_loop import ClosedLoopSession
 from ..eval.runner import Runner
 from ..launcher import launch_algorithm, stop_process
-from ..manifest import load_algorithm_manifest
+from ..manifest import (ScenarioUnknownError, deep_merge, is_scenario_path,
+                        load_algorithm_manifest, select_scenarios)
 from ..protocol import topics
 from ..registry import get_checker, get_dataset, load_plugin, validate_produces_consumes
-from ..scenario import load_scenario
+from ..scenario import Scenario, load_scenario
 from .artifacts import ArtifactRecorder, artifacts_root
 from .callback import finalize_evaluation
 from .checkout import (
@@ -36,6 +37,7 @@ from .checkout import (
 )
 from .evaluations import EvaluationStore
 from .job import Job, result_to_dict
+from .runtime import RuntimePrepareError, prepare_runtime
 
 _JOB_TTL_SECONDS = 3600.0  # job 结果在池中保留时长（本版不清理，预留）
 
@@ -75,21 +77,49 @@ class AutotestService:
 
         job_id 缺省生成；Hub 直连通路提前生成传入（M-E2 worktree 目录以 job_id 命名，
         须在 checkout 前确定）。
+        M-F2：request["scenario_ids"]（list|None）按 manifest scenarios 清单选择场景，
+        逐 entry 加载场景文件并深合并覆盖（hyperparams/checker_config/dataset_config）；
+        错误返回 {"error", "code"}（manifest_invalid / scenario_unknown，M-F3）。
         """
         try:
             manifest = load_algorithm_manifest(request["manifest"])
-            scenario_path = request.get("scenario") or manifest.scenario
-            if scenario_path and not Path(scenario_path).is_absolute():
-                # 相对路径相对算法仓库根（manifest 所在目录）解析，与 launch 工作目录语义一致
-                scenario_path = str(Path(manifest.dir) / scenario_path)
-            scenario = load_scenario(scenario_path)
-            # 评测方可覆盖场景的 checker（交叉测试矩阵用）
-            if request.get("checker"):
-                scenario.checker = request["checker"]
-            if request.get("checker_config"):
-                scenario.checker_config = request["checker_config"]
+            entries: list[tuple[str, Scenario]] = []
+            explicit_path = request.get("scenario")  # 场景文件路径（CLI --scenario 覆盖，旧语义）
+            if explicit_path is None:
+                # M-F2：清单路径——scenario_ids（None=全跑；存量仓清单=唯一 default 项 ≡ 旧行为）
+                for entry in select_scenarios(manifest, request.get("scenario_ids")):
+                    sc = load_scenario(str(Path(manifest.dir) / entry.scenario))
+                    # 覆盖优先级：场景文件 < 清单项（深合并）< 评测方（交叉测试矩阵，最高）
+                    sc.hyperparams = deep_merge(sc.hyperparams, entry.hyperparams)
+                    sc.checker_config = deep_merge(sc.checker_config, entry.checker_config)
+                    sc.dataset_config = deep_merge(sc.dataset_config, entry.dataset_config)
+                    if request.get("checker"):
+                        sc.checker = request["checker"]
+                    if request.get("checker_config"):
+                        sc.checker_config = request["checker_config"]
+                    entries.append((entry.id, sc))
+                if not entries:
+                    return {"error": "manifest 无可用场景（scenarios 与 scenario 均空）",
+                            "code": "manifest_invalid"}
+                scenario = entries[0][1]
+            else:
+                scenario_path = explicit_path
+                if scenario_path and not Path(scenario_path).is_absolute():
+                    # 相对路径相对算法仓库根（manifest 所在目录）解析，与 launch 工作目录语义一致
+                    scenario_path = str(Path(manifest.dir) / scenario_path)
+                scenario = load_scenario(scenario_path)
+                # 评测方可覆盖场景的 checker（交叉测试矩阵用）
+                if request.get("checker"):
+                    scenario.checker = request["checker"]
+                if request.get("checker_config"):
+                    scenario.checker_config = request["checker_config"]
+                entries = [("default", scenario)]
+        except ScenarioUnknownError as exc:
+            return {"error": str(exc), "code": "scenario_unknown"}
+        except FileNotFoundError as exc:
+            return {"error": f"{type(exc).__name__}: {exc}", "code": "manifest_missing"}
         except Exception as exc:  # noqa: BLE001 配置错误直接回传给 client
-            return {"error": f"{type(exc).__name__}: {exc}"}
+            return {"error": f"{type(exc).__name__}: {exc}", "code": "manifest_invalid"}
 
         job_id = job_id or f"autotest-{uuid.uuid4().hex[:8]}"
         raw_rate = request.get("clock_rate")
@@ -101,6 +131,7 @@ class AutotestService:
             session_id=f"autotest-{uuid.uuid4().hex[:8]}",
             clock_rate=clock_rate,
             eval_ctx=eval_ctx,
+            scenario_entries=entries,
         )
         with self._jobs_lock:
             self._jobs[job_id] = job
@@ -115,24 +146,38 @@ class AutotestService:
         """v1.5 §4.8（M-E1/M-E2）：Hub 直连评测提交——checkout 备好现场后走公共 submit。
 
         req: correlation_id/repo/ref/sha?/check_type/scenario?/save_baseline/pms_task_id?
-        返回 {"job_id", "sha"} / {"duplicate": True, "job_id"} / {"error"}（坐标类 4xx 语义）。
+        返回 {"job_id", "sha"} / {"duplicate": True, "job_id"} / {"error", "code"?}（坐标类 4xx 语义）。
         M-E2：git URL/owner-repo → mirror 缓存 + worktree 隔离（目录以 job_id 命名，须先生成）；
         坐标/manifest 失败时 worktree 立即清理，不留现场。
+        M-F2/M-F3：scenario 三态——null(全跑)|id|[ids] → 清单选择；路径值(含 / 或 .yaml 结尾) →
+        旧语义(manifest 相对路径)；错误码 manifest_missing/manifest_invalid/scenario_unknown。
         """
         cid = req["correlation_id"]
         job_id = f"autotest-{uuid.uuid4().hex[:8]}"
+        raw_scenario = req.get("scenario")
+        # M-F2 形态分派：路径值 → manifest 相对路径（旧语义）；其余（id 字符串 / id 列表 / None）→ 清单选择
+        scenario_path = raw_scenario if is_scenario_path(raw_scenario) else None
+        scenario_ids = (None if raw_scenario is None or is_scenario_path(raw_scenario)
+                        else ([raw_scenario] if isinstance(raw_scenario, str) else list(raw_scenario)))
         checkout = None
         try:
             checkout = prepare_checkout(req["repo"], req.get("ref"), job_id=job_id)
-            manifest_path = locate_manifest(checkout.repo_dir, req.get("scenario"))
-        except CheckoutError as exc:
-            if checkout is not None and checkout.worktree is not None:
-                remove_worktree(checkout.worktree)
+        except CheckoutError as exc:  # clone/fetch/ref 不可达等坐标错误（非 manifest 问题）
             return {"error": str(exc)}
-        reply = self.submit({"manifest": str(manifest_path)}, eval_ctx={
+        try:
+            manifest_path = locate_manifest(checkout.repo_dir, scenario_path)
+        except CheckoutError as exc:
+            if checkout.worktree is not None:
+                remove_worktree(checkout.worktree)
+            return {"error": str(exc), "code": "manifest_missing"}
+        submit_req: dict = {"manifest": str(manifest_path)}
+        if scenario_ids is not None:
+            submit_req["scenario_ids"] = scenario_ids
+        reply = self.submit(submit_req, eval_ctx={
             "cid": cid, "repo": req["repo"], "ref": req.get("ref"), "sha": checkout.sha,
             "check_type": req.get("check_type") or "autotest",
-            "scenario": req.get("scenario"),
+            "scenario": raw_scenario if isinstance(raw_scenario, str) else (
+                ",".join(raw_scenario) if raw_scenario else None),
             "save_baseline": bool(req.get("save_baseline")),
             "pms_task_id": req.get("pms_task_id"),
             "checkout": checkout,  # M-E2：worker 终态后清理 worktree
@@ -144,7 +189,9 @@ class AutotestService:
         created = self._eval_store.create(
             cid=cid, job_id=reply["job_id"], repo=req["repo"], ref=req.get("ref"),
             sha=checkout.sha,
-            check_type=req.get("check_type") or "autotest", scenario=req.get("scenario"),
+            check_type=req.get("check_type") or "autotest",
+            scenario=(raw_scenario if isinstance(raw_scenario, str) or raw_scenario is None
+                      else ",".join(raw_scenario)),
             save_baseline=bool(req.get("save_baseline")), pms_task_id=req.get("pms_task_id"),
         )
         if not created:  # 并发同 cid：PK 兜底，返回先到的 job（幂等语义不破）
@@ -225,13 +272,82 @@ class AutotestService:
             self._run_job(job)
 
     def _run_job(self, job: Job) -> None:
-        proc = None
         recorder = ArtifactRecorder(artifacts_root(), job.job_id)
         try:
-            scenario = job.scenario
+            # M-F4：job 级运行环境准备（同一 checkout 现场全场景共享一次；host → {}）
+            runtime_env = prepare_runtime(job.manifest, recorder.log)
+            # M-F2：逐场景顺序执行（旧式单场景 = [("default", scenario)] 兜底，行为不变）；
+            # 每场景独立 launch/session，场景异常记失败条目并继续后续场景（场景间相互独立）
+            entries = job.scenario_entries or [("default", job.scenario)]
+            multi = len(entries) > 1
+            for entry_id, scenario in entries:
+                prefix = f"{entry_id}:" if multi else ""
+                session_id = f"{job.session_id}-{entry_id}" if multi else job.session_id
+                self._run_scenario(job, entry_id, scenario, recorder, prefix, session_id,
+                                   runtime_env)
+        except RuntimePrepareError as exc:
+            # 环境准备失败 = job 级失败（场景未执行；docker 未实现/venv 创建失败等）
+            msg = f"运行环境准备失败: {exc}"
+            with job.lock:
+                job.error = msg
+                job.results.append({
+                    "testcase_id": "<runtime>", "metrics": None, "passed": False,
+                    "n_records": 0, "error": msg,
+                })
+            recorder.log(msg)
+        finally:
+            with job.lock:
+                job.done.set()
+            report_payload = {
+                "job_id": job.job_id,
+                "session_id": job.session_id,
+                "manifest": {
+                    "launch": job.manifest.launch,
+                    "scenario": job.manifest.scenario,
+                    "image": job.manifest.image,
+                    "runtime": job.manifest.runtime or {"type": "host"},  # M-F4 排障留痕
+                },
+                "scenario": {
+                    "body": job.scenario.body,
+                    "dataset_type": job.scenario.dataset_type,
+                },
+                # M-F2：全场景清单（id/body/dataset_type），多场景排障与 Hub 展示用
+                "scenarios": [
+                    {"id": eid, "body": sc.body, "dataset_type": sc.dataset_type}
+                    for eid, sc in (job.scenario_entries or [("default", job.scenario)])
+                ],
+                "clock_rate": job.clock_rate,
+                "results": list(job.results),
+                "error": job.error,
+                "comm_health": job.comm_health,
+                "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            recorder.save_report(report_payload)
+            # v1.5 §4.8：Hub 直连评测收尾——终态+摘要落档（M-E1）、基线滚动与主动回调（M-E3）
+            if job.eval_ctx is not None:
+                finalize_evaluation(job.eval_ctx, report_payload, self._eval_store,
+                                    recorder.dir, recorder.log)
+                # M-E2：评测落盘后清理 worktree 隔离现场（ATP_WORKTREE_KEEP=1 保留排查）
+                checkout = job.eval_ctx.get("checkout")
+                if checkout is not None and checkout.worktree is not None:
+                    remove_worktree(checkout.worktree)
+                    recorder.log(f"[checkout] worktree 已清理: {checkout.worktree.path}")
+            recorder.close()
+
+    def _run_scenario(self, job: Job, entry_id: str, scenario: Scenario,
+                      recorder: ArtifactRecorder, prefix: str, session_id: str,
+                      runtime_env: Optional[dict] = None) -> None:
+        """单场景执行主体（M-F2 自 _run_job 抽取）：body 加载 → launch → world/checker → 推流打分。
+
+        场景内异常 → 记该场景的失败条目（passed=False）+ job.error（首个），不抛出——
+        调用方继续后续场景（场景间相互独立，CI 需要完整的多场景结果矩阵）。
+        runtime_env：M-F4 运行环境注入（venv PATH 前置等；host 为 None/{}）。
+        """
+        proc = None
+        try:
             manifest = job.manifest
 
-            recorder.log(f"提交: manifest={manifest.dir} body={scenario.body} dataset={scenario.dataset_type}")
+            recorder.log(f"场景[{entry_id}]: manifest={manifest.dir} body={scenario.body} dataset={scenario.dataset_type}")
 
             # 0) 加载本体资产（v1.1 §8：body 必填）
             try:
@@ -240,7 +356,8 @@ class AutotestService:
                 raise ValueError(f"本体资产加载失败: {exc}") from exc
 
             # 1) 拉起算法，注入会话环境变量（算法据 AUTOTEST_SESSION/TOPICS 建接口）
-            proc = launch_algorithm(manifest, job.session_id)
+            #    + M-F4 运行环境（venv PATH 前置等）
+            proc = launch_algorithm(manifest, session_id, extra_env=runtime_env)
 
             # 2) 加载场景数据源与 checker（数据源工厂返回 IWorld：rosbag/rostopic/device 同接口）
             #    加载插件包触发注册（dataset 与 checker 可分属不同命名空间，都要加载）
@@ -262,16 +379,18 @@ class AutotestService:
             # 4) 会话握手 + 推流/交互 + 打分（progress_cb 逐 testcase 上报部分结果 + 留痕）
             #    闭环 World（closed_loop=True，如 SimWorld）走 ClosedLoopSession，否则走开环 Runner
             session_cls = ClosedLoopSession if getattr(world, "closed_loop", False) else Runner
-            runner = session_cls(world, checker, body=body, session_id=job.session_id, control=job.control)
+            runner = session_cls(world, checker, body=body, session_id=session_id, control=job.control)
             try:
 
                 def _on_testcase(testcase_id: str, result: Any) -> None:
+                    entry = result_to_dict(result)
+                    entry["testcase_id"] = f"{prefix}{entry['testcase_id']}"  # M-F2 多场景前缀
                     with job.lock:
-                        job.results.append(result_to_dict(result))
+                        job.results.append(entry)
                     passed = result.score.passed if result.score else None
                     metrics = result.score.metrics if result.score else None
                     recorder.log(
-                        f"testcase {testcase_id}: passed={passed} metrics={metrics} "
+                        f"testcase {prefix}{testcase_id}: passed={passed} metrics={metrics} "
                         f"records={len(result.records)}"
                     )
 
@@ -295,44 +414,20 @@ class AutotestService:
                 for warning in health["warnings"]:
                     recorder.log(f"[comm] WARNING: {warning}")
                 runner.close()
-        except Exception as exc:  # noqa: BLE001 结果回传给 client
+        except Exception as exc:  # noqa: BLE001 场景级失败记条目并继续后续场景
+            msg = f"{type(exc).__name__}: {exc}"
             with job.lock:
-                job.error = f"{type(exc).__name__}: {exc}"
-            recorder.log(f"评测失败: {job.error}")
+                if job.error is None:
+                    job.error = msg
+                job.results.append({
+                    "testcase_id": f"{prefix}<scenario>",
+                    "metrics": None, "passed": False, "n_records": 0,
+                    "error": f"场景 {entry_id} 执行失败: {msg}",
+                })
+            recorder.log(f"场景[{entry_id}]失败: {msg}")
         finally:
             if proc is not None:
                 stop_process(proc)
-            with job.lock:
-                job.done.set()
-            report_payload = {
-                "job_id": job.job_id,
-                "session_id": job.session_id,
-                "manifest": {
-                    "launch": job.manifest.launch,
-                    "scenario": job.manifest.scenario,
-                    "image": job.manifest.image,
-                },
-                "scenario": {
-                    "body": job.scenario.body,
-                    "dataset_type": job.scenario.dataset_type,
-                },
-                "clock_rate": job.clock_rate,
-                "results": list(job.results),
-                "error": job.error,
-                "comm_health": job.comm_health,
-                "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            recorder.save_report(report_payload)
-            # v1.5 §4.8：Hub 直连评测收尾——终态+摘要落档（M-E1）、基线滚动与主动回调（M-E3）
-            if job.eval_ctx is not None:
-                finalize_evaluation(job.eval_ctx, report_payload, self._eval_store,
-                                    recorder.dir, recorder.log)
-                # M-E2：评测落盘后清理 worktree 隔离现场（ATP_WORKTREE_KEEP=1 保留排查）
-                checkout = job.eval_ctx.get("checkout")
-                if checkout is not None and checkout.worktree is not None:
-                    remove_worktree(checkout.worktree)
-                    recorder.log(f"[checkout] worktree 已清理: {checkout.worktree.path}")
-            recorder.close()
 
     def spin(self) -> None:
         self._node.spin()

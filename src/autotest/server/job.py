@@ -27,6 +27,9 @@ class Job:
     # v1.5 §4.8（M-E1）：Hub 直连评测上下文（cid/repo/ref/sha/save_baseline/pms_task_id）；
     # 非 None 时评测结束回写 EvaluationStore 终态并触发主动回调（M-E3）。tzcomm 面提交为 None。
     eval_ctx: Optional[dict] = None
+    # M-F2 场景清单：[(entry_id, Scenario)]，逐场景顺序执行（每场景独立 launch/session）；
+    # 空 = 旧式单场景（执行面以 [("default", scenario)] 兜底，全兼容）
+    scenario_entries: list[tuple[str, Scenario]] = field(default_factory=list)
 
 
 def result_to_dict(result: Any) -> dict:

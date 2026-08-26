@@ -15,7 +15,7 @@ import os
 import shutil
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
@@ -54,7 +54,9 @@ class EvaluationRequest(BaseModel):
     ref: Optional[str] = None
     sha: Optional[str] = None  # 预留（Hub 已知 sha 时透传对账；实际 sha 以 checkout 回填为准）
     check_type: str = "autotest"  # 预留，恒 autotest
-    scenario: Optional[str] = None  # manifest 相对仓根路径（缺省 scenario.yaml）
+    # M-F2（docs/scenario-schema.md §7）：null=全跑 | "场景id" | ["id",...]；
+    # 路径值（含 / 或以 .yaml 结尾）保持旧语义 = manifest 相对仓根路径（缺省 scenario.yaml）
+    scenario: Optional[Union[str, list[str]]] = None
     save_baseline: bool = False  # 评测成功且该位置 true 时滚动基线（M-E3 生效）
     pms_task_id: Optional[str] = None  # 预留（PMS 任务锚点透传）
 
@@ -160,8 +162,11 @@ def create_app(service: AutotestService) -> FastAPI:
             return {"ok": True, "duplicate": True, "job_id": existing["job_id"]}
         reply = service.submit_evaluation(req.model_dump())
         if reply.get("error"):
-            response.status_code = 400  # 坐标类错误（repo/ref 不可达、manifest 缺失）→ Hub 直接判 failure
-            return {"ok": False, "error": reply["error"]}
+            response.status_code = 400  # 坐标类错误（repo/ref 不可达、manifest 缺失、未知场景）→ Hub 直接判 failure
+            body: dict = {"ok": False, "error": reply["error"]}
+            if reply.get("code"):  # M-F3 机读错误码：manifest_missing/manifest_invalid/scenario_unknown
+                body["code"] = reply["code"]
+            return body
         if reply.get("duplicate"):  # 并发同 cid 的 PK 兜底分支
             response.status_code = 200
             return {"ok": True, "duplicate": True, "job_id": reply["job_id"]}

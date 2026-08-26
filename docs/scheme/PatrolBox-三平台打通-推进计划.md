@@ -202,13 +202,10 @@
     `/api/command`(pause/step/resume)与 `/health` 不受队列阻塞
   - 影响:test_service_parallel_jobs 等存量并行语义测试改为验证排队语义
   - **验收**:并发提交 2 个评测 → 串行执行、顺序可证;pytest 全绿
-- [ ] **M-E6 联调(主负责方评估为 cicd-hub,2026-08-25 晚探活确认:链路编排/归位/验收标准均在 Hub 侧,ATP 为被动执行面)**:
-  cicd_test 真实 push → Hub 编排 → 直连 ATP → 倒立摆评测 →
-  回调归位(或轮询兜底)→ check-runs 回写 PR → PMS 落卡 + 飞书(失败);**与 Hub N1b 联合 E2E 合并**(同一 PR 生命周期);
-  另覆盖通路3(mannultest 分支手动测试)与通路2/4(均已具备条件,一并验收)。
-  **联调环境事实(2026-08-25 晚)**:Hub(2334)+ATP(2335)本机同机,最小完备;
-  Hub atp_pool 已配 atp-local→tz-box/cicd_test(dev token 一致);O2 deploy key 实质就绪(cicd_test 真机 checkout+评测 success);
-  **唯一硬卡点**:Hub config.json callback_token 为空(callback 端点实测 401)→ Hub 配 token 重启 + ATP atp.env 写 HUB_CALLBACK_* 即闭环
+- [x] **M-E6 联调——已勾销(2026-08-26,据 Hub《三系统并行开发规划-2026-08-26》§0 基线)**:
+  v1.5 直连迁移收官(Hub v0.7.0,V1~V10 全落,**E2E-1~4 真实通过**);Hub callback_token 已配通(通路1 回调归位实测真实通过)。
+  原验收项:cicd_test 真实 push → Hub 编排 → 直连 ATP → 倒立摆评测 → 回调归位/轮询兜底 → check-runs 回写 → PMS 落卡,
+  随 Hub v0.7.0 E2E-1~4 一并真实通过;通路2/3/4 同周期覆盖
 - [x] **M-E7 文档**(2026-08-25 收口):部署文档=deploy/autotest.service 头部注释(X3 三件套/workspace/deploy key 已全);
   《使用指南》§8 整节重写为 v1.5 直连版(触发模型/前置条件/部署步骤/流程/HTTP 面端点表含 capabilities+console/
   手动触发排障/GHA 降级 §8.7 自测备选);《算法测试接入手册》§3.8 同步;契约 §14 纪律回写(v1.2 已先行一轮)
@@ -246,6 +243,46 @@
   - console.html:顶栏改飞书登录/用户角色/登出为主通道,token 输入折叠为"机器 token 备选";login_error 横幅;写档位按钮联动
   - **验收**:单测 14(成员门直中/回填/拒绝/state 失效/会话持久化/双通道三档/503-401 语义);pytest 239 全绿;
     真机 oauth:false 降级/Bearer 不受影响/匿名 401 全通过;待 O3 分发 app_id/secret 后即可真机飞书登录
+  - **配置闭环(2026-08-25 晚)**:FEISHU_APP_ID/SECRET 取自 cicd-hub config.json(同一只自建应用)已写入 atp.env;
+    console_users.json copy Hub 4 名 admin(Mark open_id 直中,其余首登回填);真机 oauth:true/start 302/域名回调全通,
+    M 已实际登录成功
+
+### 3.5 批次 F:scenario 体系 + 评测环境隔离(2026-08-26 立项)
+
+> **依据**:Hub《三系统并行开发规划-2026-08-26》(v1.5 收官后四项需求 R1~R4)。
+> ATP 分派:**R2 配合**(scenario.yaml Schema 权威 + scenario 参数生效 + 错误码规范化)+ **R3 主责**(runtime 隔离)。
+> 定位:测试定义权威在被测仓内,ATP 是通用执行器——不存在"ATP 端测试目录"接口。
+> 排期:`Schema(先行,Hub scenario 勾选依赖) → scenario 生效 → venv(F1) → docker(F2,中期)`。
+
+- [x] **M-F1 scenario.yaml Schema 权威定义**(R2 核心,先行项,**已收口 2026-08-26**):[scenario-schema.md](../../scenario-schema.md)——
+  三层模型(manifest→场景文件→执行面);manifest 全字段表 + **scenarios 场景清单**(id ^[a-z0-9_]+$/description/
+  scenario 引用/hyperparams·checker_config·dataset_config 深合并覆盖/baseline 仓内参考基线)+ **runtime 声明**
+  (host|venv|docker,缺省 host 零迁移,与旧 image 字段关系厘清)+ submit.scenario 语义(null|id|[ids]|路径旧语义过渡)
+  + 错误码表(manifest_missing/manifest_invalid/scenario_unknown)+ 双示例(cicd_test 现状兼容/多场景+venv 全量)
+- [x] **M-F2 scenario 参数生效**(**已收口 2026-08-26**):`POST /atp/evaluations` scenario 字段激活——
+  `null(全跑)|"id"|["a","b"]`;多场景单 job 顺序执行(每场景独立 launch/session,testcase_id 带
+  `场景id:` 前缀,report.json 落全场景清单;场景异常记失败条目并继续后续场景);清单项
+  hyperparams/checker_config/dataset_config **深合并**覆盖场景文件(覆盖优先级:场景文件 < 清单项 <
+  评测方 checker 覆盖);未知 id → 400 scenario_unknown;路径值(含 / 或 .yaml 结尾)保持旧语义平滑过渡。
+  测试:unit test_scenario_manifest.py 18 例 + functional 多场景端到端 3 例
+- [x] **M-F3 manifest 错误规范化**(**已收口 2026-08-26**):错误响应统一 `{"ok":false,"error","code"}`——
+  manifest_missing / manifest_invalid / scenario_unknown 三层贯通(submit → submit_evaluation → HTTP 400),
+  对齐 Hub 4xx 判 failure 语义
+- [x] **M-F4 venv runtime(F1 期,已收口 2026-08-26)**:`runtime.type: venv` → 仓根 `.atp-venv` 复用/创建
+  (`--system-site-packages`)+ `pip install -r requirements.txt`(job 级一次,全场景共享);评测进程
+  PATH 前置切 venv 解释器,SDK(autotest/tzcomm)经 PYTHONPATH 透传(算法仓无需重复声明);无
+  requirements → 裸 venv + WARNING;失败 → job 级 failure(`<runtime>` 失败条目);`type: docker`
+  F1 期明确报错不静默回退。测试:unit test_runtime.py 7 例 + functional venv/docker 端到端 2 例
+- [ ] **M-F5 docker runtime(F2 期,中期非阻塞)**:`runtime.type: docker` → 仓根 Dockerfile build 或
+  image 拉取,容器内评测,产物卷挂载回传;前置 docker daemon + 评测用户 docker 组(部署文档补)
+
+#### 批次 F 跨系统配合(传递 Hub/PMS)
+
+- **Hub 主责(R2)**:manual-check scenario 勾选(GitHub Contents API 读仓内 scenario.yaml,无需 ATP 新接口)、
+  rules.repos checks 项 scenario 字段、`_dispatch_atp` 透传 scenario、atp_pool 界面化(∥ N2c)、T1c 改造(等 PMS)
+- **PMS 主责(R1+R4)**:task_repos 绑定模型 + `GET /pms/tasks?repo=` 语义变更 + 任务卡 CI 结果区块——ATP 无配合项
+- **契约变更(§3.3,已双向确认)**:`POST /atp/evaluations` scenario 字段激活语义 + 4xx code 字段——
+  **ATP 侧已就绪(M-F2/M-F3,2026-08-26)**,Hub 可对照 [scenario-schema.md](../../scenario-schema.md) §7/§8 对接
 
 #### 批次 E 建议开工顺序(本仓内,不依赖外部)
 
