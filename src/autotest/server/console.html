@@ -51,6 +51,7 @@
 <body>
 <header>
   <h1>ATP 控制台</h1><span id="hdr-ver" class="dim"></span>
+  <a href="/docs" style="color:#7fa8e0;text-decoration:none;font-size:13px">文档 →</a>
   <div class="spacer"></div>
   <span id="who" class="dim" style="font-size:13px"></span>
   <span id="auth-box"></span>
@@ -79,7 +80,7 @@
       <div class="row">
         <label>repo（本地路径 / git URL / owner/repo）<input id="s-repo" size="34" required placeholder="owner/repo"></label>
         <label>ref<input id="s-ref" size="20" placeholder="refs/heads/main"></label>
-        <label>scenario（可选）<input id="s-scn" size="16" placeholder="scenario.yaml"></label>
+        <label>scenario（可选）<input id="s-scn" size="16" placeholder="场景 id / 路径，空=全跑"></label>
         <label>correlation_id（可选）<input id="s-cid" size="22" placeholder="chk_manual_<ts>"></label>
         <label class="ck"><input type="checkbox" id="s-base"> save_baseline</label>
         <label class="ck"><button type="submit" id="s-go">提交</button></label>
@@ -214,7 +215,8 @@ $("f-submit").onsubmit = async ev => {
     repo: $("s-repo").value.trim(),
   };
   if ($("s-ref").value.trim()) body.ref = $("s-ref").value.trim();
-  if ($("s-scn").value.trim()) body.scenario = $("s-scn").value.trim();
+  const scn = $("s-scn").value.trim();  // 单 id / 路径 → str；逗号分隔 → 多场景列表（M-F2 三态）
+  if (scn) body.scenario = scn.includes(",") ? scn.split(",").map(s => s.trim()).filter(Boolean) : scn;
   if ($("s-base").checked) body.save_baseline = true;
   try {
     const r = await jget("/atp/evaluations", { method: "POST", headers: { ...auth(), "Content-Type": "application/json" }, body: JSON.stringify(body) });

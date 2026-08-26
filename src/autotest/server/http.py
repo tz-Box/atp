@@ -118,7 +118,9 @@ def _raise_auth_unavailable_or_401() -> None:
 
 def create_app(service: AutotestService) -> FastAPI:
     """在既有 AutotestService 上挂 HTTP 路由（与 tzcomm 面共享 Jobs 池）。"""
-    app = FastAPI(title="autotest-service", version="0.1.0")
+    # Swagger 挪 /api/docs：/docs 让给算法工程师文档门户（ docs.html ）
+    app = FastAPI(title="autotest-service", version="0.1.0",
+                  docs_url="/api/docs", redoc_url=None)
     app.include_router(auth.router)  # M-E11 飞书登录（人通道，与 Bearer 机器通道分层并存）
 
     @app.get("/health")
@@ -230,7 +232,61 @@ def create_app(service: AutotestService) -> FastAPI:
     def console() -> str:
         return (Path(__file__).with_name("console.html")).read_text(encoding="utf-8")
 
+    # ---- 文档门户（面向算法工程师；仓内 docs/*.md 源文件直出，零构建零认证——内容非敏感）----
+
+    @app.get("/docs", response_class=HTMLResponse)
+    def docs_portal() -> str:
+        return (Path(__file__).with_name("docs.html")).read_text(encoding="utf-8")
+
+    @app.get("/docs/marked.min.js")
+    def docs_marked() -> Response:
+        # vendor 的 marked v12（仓内 docs_static/，避免内网依赖公网 CDN）
+        return Response((Path(__file__).with_name("docs_static") / "marked.min.js")
+                        .read_text(encoding="utf-8"), media_type="application/javascript")
+
+    @app.get("/docs/api/index")
+    def docs_index() -> dict:
+        return {"items": _docs_index()}
+
+    @app.get("/docs/md/{name}")
+    def docs_md(name: str) -> Response:
+        path = _docs_file(name)
+        if path is None:
+            raise HTTPException(404, f"未知文档: {name!r}")
+        return Response(path.read_text(encoding="utf-8"),
+                        media_type="text/markdown; charset=utf-8")
+
     return app
+
+
+# 文档门户目录（src/autotest/server/http.py → parents[3] = 仓根）；仅顶层 *.md（scheme/ 为内部资料不暴露）
+_DOCS_DIR = Path(__file__).resolve().parents[3] / "docs"
+_DOCS_ORDER = ["快速上手.md", "算法接入手册.md", "scenario-schema.md", "CI集成.md"]  # 学习路径序
+
+
+def _docs_index() -> list[dict]:
+    """文档清单（门户左侧导航）：学习路径序优先，其余按文件名；title 取首个一级标题。"""
+    files = [p for p in _DOCS_DIR.glob("*.md")]
+    files.sort(key=lambda p: (_DOCS_ORDER.index(p.name) if p.name in _DOCS_ORDER else 99, p.name))
+    items = []
+    for p in files:
+        title = p.stem
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if line.startswith("# "):
+                title = line[2:].strip()
+                break
+        items.append({"file": p.name, "title": title})
+    return items
+
+
+def _docs_file(name: str) -> Optional[Path]:
+    """按文件名安全解析仓内 docs 顶层 md（防路径穿越；scheme/ 子目录不暴露）。"""
+    if not name.endswith(".md") or "/" in name or ".." in name:
+        return None
+    path = (_DOCS_DIR / name).resolve()
+    if path.parent != _DOCS_DIR.resolve() or not path.is_file():
+        return None
+    return path
 
 
 def _atp_version() -> str:

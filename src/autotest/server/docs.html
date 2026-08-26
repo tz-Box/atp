@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATP 文档</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #0f1419; color: #d7dde4; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+           background: #161d26; border-bottom: 1px solid #2a3542;
+           position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .spacer { flex: 1; }
+  header a { color: #7fa8e0; text-decoration: none; font-size: 13px; }
+  header a:hover { text-decoration: underline; }
+  .badge { font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #143526; color: #4cc38a; }
+  .badge.bad { background: #3a1d1d; color: #f16a6a; }
+  .badge.dim { background: #1e2833; color: #7f8b99; }
+  .wrap { display: flex; max-width: 1280px; margin: 0 auto; }
+  nav { width: 230px; flex-shrink: 0; padding: 18px 0; border-right: 1px solid #1e2833;
+        position: sticky; top: 49px; align-self: flex-start; max-height: calc(100vh - 49px); overflow: auto; }
+  nav a { display: block; padding: 8px 20px; color: #a8b3c0; text-decoration: none;
+          font-size: 13px; border-left: 2px solid transparent; }
+  nav a:hover { color: #d7dde4; background: #161d26; }
+  nav a.cur { color: #7fa8e0; border-left-color: #2563eb; background: #161d26; }
+  nav .tip { padding: 12px 20px; font-size: 12px; color: #5c6773; line-height: 1.5; }
+  main { flex: 1; min-width: 0; padding: 20px 32px 60px; }
+  main h1 { font-size: 22px; border-bottom: 1px solid #2a3542; padding-bottom: 10px; }
+  main h2 { font-size: 17px; margin-top: 32px; border-bottom: 1px solid #1e2833; padding-bottom: 6px; }
+  main h3 { font-size: 15px; margin-top: 24px; }
+  main a { color: #7fa8e0; text-decoration: none; }
+  main a:hover { text-decoration: underline; }
+  main code { background: #1e2833; border-radius: 4px; padding: 1px 6px; font-size: 13px;
+              font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  main pre { background: #121922; border: 1px solid #1e2833; border-radius: 8px;
+             padding: 12px 14px; overflow-x: auto; }
+  main pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; }
+  main table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+  main th { text-align: left; color: #7f8b99; font-weight: 500; padding: 7px 10px;
+            border-bottom: 1px solid #2a3542; }
+  main td { padding: 7px 10px; border-bottom: 1px solid #1e2833; vertical-align: top; }
+  main blockquote { margin: 12px 0; padding: 8px 14px; border-left: 3px solid #2563eb;
+                    background: #121922; color: #a8b3c0; border-radius: 0 6px 6px 0; }
+  main blockquote p { margin: 4px 0; }
+  main img { max-width: 100%; }
+  main ul, main ol { padding-left: 22px; }
+  main li { margin: 3px 0; }
+  #loading { color: #5c6773; padding: 40px 0; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ATP 文档</h1><span class="badge dim" id="h-badge">…</span>
+  <div class="spacer"></div>
+  <a href="/console">控制台 →</a>
+</header>
+<div class="wrap">
+  <nav id="nav"><div class="tip">加载中…</div></nav>
+  <main id="doc"><div id="loading">加载中…</div></main>
+</div>
+<script src="/docs/marked.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+marked.setOptions({ gfm: true, breaks: false });
+let docs = [];
+
+async function loadNav() {
+  const r = await fetch("/docs/api/index");
+  docs = (await r.json()).items;
+  $("nav").innerHTML = docs.map(d =>
+    `<a href="#/${encodeURIComponent(d.file)}" data-f="${esc(d.file)}">${esc(d.title)}</a>`
+  ).join("") + `<div class="tip">文档随仓维护，服务直出源文件，永远最新。</div>`;
+}
+
+function current() {
+  const h = decodeURIComponent(location.hash.replace(/^#\//, ""));
+  return docs.some(d => d.file === h) ? h : (docs[0] && docs[0].file);
+}
+
+async function render() {
+  if (!docs.length) return;
+  const file = current();
+  document.querySelectorAll("nav a").forEach(a =>
+    a.classList.toggle("cur", a.dataset.f === file));
+  $("doc").innerHTML = '<div id="loading">加载中…</div>';
+  const r = await fetch("/docs/md/" + encodeURIComponent(file));
+  if (!r.ok) { $("doc").innerHTML = `<p>文档加载失败：${r.status}</p>`; return; }
+  $("doc").innerHTML = marked.parse(await r.text());
+  // 仓内相对 .md 链接 → 门户内跳转；仓内代码链接(../plugins 等) → 提示不可达；外链新窗口
+  $("doc").querySelectorAll("a").forEach(a => {
+    const href = a.getAttribute("href") || "";
+    if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener"; }
+    else if (href.endsWith(".md")) {
+      const name = href.split("/").pop();
+      if (docs.some(d => d.file === name)) {
+        a.href = "#/" + encodeURIComponent(name);
+      } else { a.removeAttribute("href"); a.style.color = "#5c6773"; a.title = "仓内源码路径，网页内不可达"; }
+    }
+    else if (href.startsWith(".") || href.startsWith("/")) {
+      a.removeAttribute("href"); a.style.color = "#5c6773"; a.title = "仓内源码路径，网页内不可达";
+    }
+  });
+  window.scrollTo(0, 0);
+}
+
+async function healthBadge() {
+  try {
+    const h = await (await fetch("/atp/health")).json();
+    const b = $("h-badge");
+    if (h.ok) { b.className = "badge"; b.textContent = `服务正常 · v${h.version} · 队列 ${h.queue}`; }
+    else { b.className = "badge bad"; b.textContent = "服务异常（tzcomm 不可达）"; }
+  } catch (e) { const b = $("h-badge"); b.className = "badge bad"; b.textContent = "服务不可达"; }
+}
+
+window.addEventListener("hashchange", render);
+loadNav().then(render);
+healthBadge();
+setInterval(healthBadge, 15000);
+</script>
+</body>
+</html>

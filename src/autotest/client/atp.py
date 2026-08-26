@@ -162,7 +162,8 @@ def main(argv: list[str]) -> int:
     submit_parser.add_argument("--ref", default=None, help="分支/tag/sha（缺省远端 HEAD）")
     submit_parser.add_argument("--cid", default=None,
                                help="correlation_id（缺省 chk_manual_<时间戳>；同 cid 幂等）")
-    submit_parser.add_argument("--scenario", default=None, help="manifest 相对仓根路径")
+    submit_parser.add_argument("--scenario", default=None,
+                               help="场景 id（仓内 scenario.yaml 清单）| manifest 相对仓根路径；缺省=清单全跑")
     submit_parser.add_argument("--save-baseline", action="store_true", help="成功时滚动基线")
     submit_parser.add_argument("--no-wait", action="store_true", help="202 即返，不等待终态")
     submit_parser.add_argument("--timeout", type=float, default=1800.0,
