@@ -276,6 +276,17 @@
 - [ ] **M-F5 docker runtime(F2 期,中期非阻塞)**:`runtime.type: docker` → 仓根 Dockerfile build 或
   image 拉取,容器内评测,产物卷挂载回传;前置 docker daemon + 评测用户 docker 组(部署文档补)
 
+#### 批次 F 真机联调就绪(2026-08-26,ATP 侧)
+
+- ATP 服务已重启承接新代码(:2335,/atp/health ok);Hub v0.8.0 scenario 真实下发的三态**真机冒烟全过**:
+  `unknown → 400 {"ok":false,"code":"scenario_unknown"}(报文含可用清单)`｜`"small_push" → success 1/1
+  (单场景无前缀,vs_baseline improved=1)`｜`null 全跑 → success 3/3(testcase_id 带 场景id: 前缀,
+  report.json 落 scenarios 全清单 + manifest.runtime)`
+- 联调素材:cicd_test 仓 scenario.yaml 已升级 scenarios 清单权威格式(`small_push`/`full`,
+  本地 commit 20c6993,**待 push 后 Hub Contents API 可读**)
+- 注意:多场景前缀改变 testcase_id 命名空间,存量滚动基线首轮全记 `vs_baseline: new=N`(一次性,
+  下次 save_baseline 后以新命名空间为准)
+
 #### 批次 F 跨系统配合(传递 Hub/PMS)
 
 - **Hub 主责(R2)**:manual-check scenario 勾选(GitHub Contents API 读仓内 scenario.yaml,无需 ATP 新接口)、
