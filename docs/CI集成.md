@@ -82,13 +82,13 @@ ATP 在评测机维护**滚动基线**（`artifacts/baseline.json`），每次�
 
 ## 6. 手动预验证（联调/算法调试）
 
-不走 Hub，直接打 ATP（与 Hub 同款接口）：
+不走 Hub，直接打 ATP（与 Hub 同款接口）。先一次登录（`atp login` 落盘配置，免 export，
+详见 [快速上手](快速上手.md) §1），随后：
 
 ```bash
-export ATP_BASE_URL=http://atp.turing-zero.com
-export ATP_SERVICE_TOKEN=<token>
 python3 -m autotest.client atp submit --repo <owner/repo> --ref <分支> --scenario smoke
 # 默认阻塞等终态并输出 summary；--no-wait 仅受理即返；同 --cid 幂等安全重放
+# CI/脚本注入场景仍可用环境变量 ATP_BASE_URL / ATP_SERVICE_TOKEN（优先于配置文件）
 ```
 
 console 表单等价（飞书登录，admin 可触发，member 只读）。

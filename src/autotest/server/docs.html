@@ -26,6 +26,9 @@
           font-size: 13px; border-left: 2px solid transparent; }
   nav a:hover { color: #d7dde4; background: #161d26; }
   nav a.cur { color: #7fa8e0; border-left-color: #2563eb; background: #161d26; }
+  nav a .no { display: inline-block; width: 18px; height: 18px; line-height: 18px; text-align: center;
+              border-radius: 50%; background: #1e2833; color: #5c6773; font-size: 11px; margin-right: 8px; }
+  nav a.cur .no { background: #2563eb; color: #fff; }
   nav .tip { padding: 12px 20px; font-size: 12px; color: #5c6773; line-height: 1.5; }
   main { flex: 1; min-width: 0; padding: 20px 32px 60px; }
   main h1 { font-size: 22px; border-bottom: 1px solid #2a3542; padding-bottom: 10px; }
@@ -71,9 +74,9 @@ let docs = [];
 async function loadNav() {
   const r = await fetch("/docs/api/index");
   docs = (await r.json()).items;
-  $("nav").innerHTML = docs.map(d =>
-    `<a href="#/${encodeURIComponent(d.file)}" data-f="${esc(d.file)}">${esc(d.title)}</a>`
-  ).join("") + `<div class="tip">文档随仓维护，服务直出源文件，永远最新。</div>`;
+  $("nav").innerHTML = docs.map((d, i) =>
+    `<a href="#/${encodeURIComponent(d.file)}" data-f="${esc(d.file)}"><span class="no">${i + 1}</span>${esc(d.title)}</a>`
+  ).join("") + `<div class="tip">按序号由浅入深阅读。文档随仓维护，服务直出源文件，永远最新。</div>`;
 }
 
 function current() {
@@ -91,11 +94,12 @@ async function render() {
   if (!r.ok) { $("doc").innerHTML = `<p>文档加载失败：${r.status}</p>`; return; }
   $("doc").innerHTML = marked.parse(await r.text());
   // 仓内相对 .md 链接 → 门户内跳转；仓内代码链接(../plugins 等) → 提示不可达；外链新窗口
+  // 注意：marked 对中文 href 做 percent-encoding，须 decode 后再与文档清单比对
   $("doc").querySelectorAll("a").forEach(a => {
     const href = a.getAttribute("href") || "";
     if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener"; }
     else if (href.endsWith(".md")) {
-      const name = href.split("/").pop();
+      const name = decodeURIComponent(href.split("/").pop());
       if (docs.some(d => d.file === name)) {
         a.href = "#/" + encodeURIComponent(name);
       } else { a.removeAttribute("href"); a.style.color = "#5c6773"; a.title = "仓内源码路径，网页内不可达"; }

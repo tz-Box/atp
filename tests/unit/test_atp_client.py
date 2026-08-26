@@ -54,11 +54,22 @@ def mock_atp(monkeypatch):
     server = ThreadingHTTPServer(("127.0.0.1", 0), _MockAtp)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    monkeypatch.setenv("ATP_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}")
+    _MockAtp.base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    monkeypatch.setenv("ATP_BASE_URL", _MockAtp.base_url)
     monkeypatch.setenv("ATP_SERVICE_TOKEN", _TOKEN)
     yield _MockAtp
     server.shutdown()
     server.server_close()
+
+
+@pytest.fixture()
+def cfg_tmp(tmp_path, monkeypatch):
+    """client.env 指向临时路径 + 清空 env（验证落盘配置独立生效）。"""
+    cfg = tmp_path / "client.env"
+    monkeypatch.setattr(atp, "_CFG_PATH", cfg)
+    monkeypatch.delenv("ATP_BASE_URL", raising=False)
+    monkeypatch.delenv("ATP_SERVICE_TOKEN", raising=False)
+    return cfg
 
 
 # ---- 函数层 ----
@@ -166,3 +177,95 @@ def test_cli_atp_wait_failure_exit_1(mock_atp, capsys):
     mock_atp.routes[("GET", "/atp/evaluations/j1")] = (
         200, {"job_id": "j1", "status": "failure", "report": {"summary": "0/2 passed"}})
     assert cli_main(["atp", "wait", "j1"]) == 1
+
+
+# ---- login/logout/whoami（交互式配置，免 export） ----
+
+_HEALTH_OK = (200, {"ok": True, "version": "0.1.0", "tzcomm": True, "queue": 0})
+
+
+def test_login_saves_file_chmod600_and_probes(mock_atp, cfg_tmp, capsys):
+    mock_atp.routes[("GET", "/atp/health")] = _HEALTH_OK
+    rc = cli_main(["atp", "login", "--base-url", mock_atp.base_url + "/", "--token", "tok-abc"])
+    assert rc == 0
+    content = cfg_tmp.read_text()
+    assert f"ATP_BASE_URL={mock_atp.base_url}\n" in content  # 尾斜杠已规整
+    assert "ATP_SERVICE_TOKEN=tok-abc\n" in content
+    assert (cfg_tmp.stat().st_mode & 0o777) == 0o600
+    # 落盘配置立即生效（env 已被 cfg_tmp 清空）
+    assert atp._base_url() == mock_atp.base_url
+    assert atp._token() == "tok-abc"
+    assert "探活成功" in capsys.readouterr().out
+
+
+def test_login_interactive_prompts(mock_atp, cfg_tmp, monkeypatch, capsys):
+    mock_atp.routes[("GET", "/atp/health")] = _HEALTH_OK
+    answers = iter([mock_atp.base_url])  # 地址经交互录入
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(atp.getpass, "getpass", lambda prompt="": "tok-secret")
+    assert cli_main(["atp", "login"]) == 0
+    assert "ATP_SERVICE_TOKEN=tok-secret\n" in cfg_tmp.read_text()
+
+
+def test_login_interactive_default_base(mock_atp, cfg_tmp, monkeypatch):
+    mock_atp.routes[("GET", "/atp/health")] = _HEALTH_OK
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")  # 回车 = 默认地址
+    monkeypatch.setattr(atp.getpass, "getpass", lambda prompt="": "t")
+    monkeypatch.setattr(atp, "_DEFAULT_BASE", mock_atp.base_url)
+    assert cli_main(["atp", "login"]) == 0
+    assert f"ATP_BASE_URL={mock_atp.base_url}\n" in cfg_tmp.read_text()
+
+
+def test_login_empty_token_rejected(cfg_tmp, monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    monkeypatch.setattr(atp.getpass, "getpass", lambda prompt="": "")
+    assert cli_main(["atp", "login"]) == 2
+    assert not cfg_tmp.exists()
+    assert "令牌为空" in capsys.readouterr().err
+
+
+def test_login_unreachable_still_saves_warns(cfg_tmp, capsys):
+    rc = cli_main(["atp", "login", "--base-url", "http://127.0.0.1:1", "--token", "t"])
+    assert rc == 1
+    assert cfg_tmp.exists()  # 配置仍落盘，仅警告不可达
+    assert "暂不可达" in capsys.readouterr().err
+
+
+def test_logout_removes_file_idempotent(cfg_tmp, capsys):
+    cfg_tmp.write_text("ATP_BASE_URL=http://x\nATP_SERVICE_TOKEN=t\n")
+    assert cli_main(["atp", "logout"]) == 0
+    assert not cfg_tmp.exists()
+    assert cli_main(["atp", "logout"]) == 0  # 幂等
+    assert "无已保存配置" in capsys.readouterr().out
+
+
+def test_whoami_shows_sources_and_masks_token(mock_atp, cfg_tmp, capsys):
+    cfg_tmp.write_text(f"ATP_BASE_URL={mock_atp.base_url}\nATP_SERVICE_TOKEN=tok-xyz\n")
+    mock_atp.routes[("GET", "/atp/health")] = _HEALTH_OK
+    assert cli_main(["atp", "whoami"]) == 0
+    out = capsys.readouterr().out
+    assert "tok-xyz" not in out and "tok-" in out  # 掩码，不泄露全文
+    assert "配置文件" in out and '"ok": true' in out
+
+
+def test_whoami_unreachable_exit_1(cfg_tmp, capsys):
+    cfg_tmp.write_text("ATP_BASE_URL=http://127.0.0.1:1\nATP_SERVICE_TOKEN=t\n")
+    assert cli_main(["atp", "whoami"]) == 1
+    assert "不可达" in capsys.readouterr().err
+
+
+def test_env_overrides_file_cfg(cfg_tmp, monkeypatch):
+    cfg_tmp.write_text("ATP_BASE_URL=http://file:1/\nATP_SERVICE_TOKEN=file-tok\n")
+    monkeypatch.setenv("ATP_BASE_URL", "http://env:2/")
+    monkeypatch.setenv("ATP_SERVICE_TOKEN", "env-tok")
+    assert atp._base_url() == "http://env:2"  # 环境变量优先 + 尾斜杠规整
+    assert atp._token() == "env-tok"
+
+
+def test_file_cfg_auth_header(mock_atp, cfg_tmp):
+    """env 清空后 submit 走落盘 token（login 后即用的核心通路）。"""
+    cfg_tmp.write_text(f"ATP_BASE_URL={mock_atp.base_url}\nATP_SERVICE_TOKEN=file-tok\n")
+    mock_atp.routes[("POST", "/atp/evaluations")] = (202, {"ok": True, "job_id": "j"})
+    code, _ = atp.submit("/r")
+    assert code == 202
+    assert mock_atp.posts[0][2] == "Bearer file-tok"
