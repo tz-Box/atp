@@ -1,7 +1,7 @@
 """算法侧静态注册声明：算法仓库根目录的 scenario.yaml。
 
 v1.1 §3 冻结：module 常量化移除，改由 consumes 列表声明算法消费的数据 schema。
-批次 F（M-F2，R2）：新增 scenarios 场景清单 + runtime 声明，Schema 权威见 docs/scenario-schema.md。
+批次 F（M-F2，R2）：新增 scenarios 场景清单 + runtime 声明，Schema 权威见 docs/03-scenario-schema.md。
 旧字段 scenario: 单引用 = scenarios 省略时的默认匿名场景（向后兼容）。
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ class ScenarioUnknownError(ValueError):
 
 @dataclass
 class ScenarioEntry:
-    """场景清单项（docs/scenario-schema.md §3）：id + 场景文件引用 + 深合并覆盖键。"""
+    """场景清单项（docs/03-scenario-schema.md §3）：id + 场景文件引用 + 深合并覆盖键。"""
     id: str                       # ^[a-z0-9_]+$；匿名默认场景为 "default"
     scenario: str                 # 场景文件（相对 manifest 目录）
     description: str = ""
@@ -114,7 +114,7 @@ def load_algorithm_manifest(path: str) -> AlgorithmManifest:
 
 def select_scenarios(manifest: AlgorithmManifest,
                      requested: Union[None, str, list[str]]) -> list[ScenarioEntry]:
-    """按 submit.scenario 选择场景（docs/scenario-schema.md §7）。
+    """按 submit.scenario 选择场景（docs/03-scenario-schema.md §7）。
 
     None → 清单全部；str/list → 按 id 过滤（保清单顺序）；未中 → ScenarioUnknownError。
     """
@@ -134,7 +134,7 @@ def is_scenario_path(value: object) -> bool:
 
 
 def deep_merge(base: dict, override: dict) -> dict:
-    """递归深合并（清单项覆盖键语义，docs/scenario-schema.md §3）：override 逐键覆盖 base。"""
+    """递归深合并（清单项覆盖键语义，docs/03-scenario-schema.md §3）：override 逐键覆盖 base。"""
     out = dict(base or {})
     for k, v in (override or {}).items():
         if isinstance(v, dict) and isinstance(out.get(k), dict):

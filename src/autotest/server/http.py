@@ -54,7 +54,7 @@ class EvaluationRequest(BaseModel):
     ref: Optional[str] = None
     sha: Optional[str] = None  # 预留（Hub 已知 sha 时透传对账；实际 sha 以 checkout 回填为准）
     check_type: str = "autotest"  # 预留，恒 autotest
-    # M-F2（docs/scenario-schema.md §7）：null=全跑 | "场景id" | ["id",...]；
+    # M-F2（docs/03-scenario-schema.md §7）：null=全跑 | "场景id" | ["id",...]；
     # 路径值（含 / 或以 .yaml 结尾）保持旧语义 = manifest 相对仓根路径（缺省 scenario.yaml）
     scenario: Optional[Union[str, list[str]]] = None
     save_baseline: bool = False  # 评测成功且该位置 true 时滚动基线（M-E3 生效）
@@ -261,13 +261,12 @@ def create_app(service: AutotestService) -> FastAPI:
 
 # 文档门户目录（src/autotest/server/http.py → parents[3] = 仓根）；仅顶层 *.md（scheme/ 为内部资料不暴露）
 _DOCS_DIR = Path(__file__).resolve().parents[3] / "docs"
-_DOCS_ORDER = ["快速上手.md", "算法接入手册.md", "scenario-schema.md", "CI集成.md"]  # 学习路径序
 
 
 def _docs_index() -> list[dict]:
-    """文档清单（门户左侧导航）：学习路径序优先，其余按文件名；title 取首个一级标题。"""
-    files = [p for p in _DOCS_DIR.glob("*.md")]
-    files.sort(key=lambda p: (_DOCS_ORDER.index(p.name) if p.name in _DOCS_ORDER else 99, p.name))
+    """文档清单（门户左侧导航）：文件名数字前缀即学习路径序（01- 02- …，新增文档选号落位即可，
+    无需改服务端）；无前缀文件排在其后按名排序；title 取首个一级标题。"""
+    files = sorted(_DOCS_DIR.glob("*.md"), key=lambda p: p.name)
     items = []
     for p in files:
         title = p.stem

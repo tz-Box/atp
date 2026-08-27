@@ -32,14 +32,15 @@ def test_marked_js_served(client):
 def test_index_order_and_titles(client):
     items = client.get("/docs/api/index").json()["items"]
     files = [it["file"] for it in items]
-    # 学习路径序：快速上手 → 接入手册 → Schema → CI 集成
-    assert files[:4] == ["快速上手.md", "算法接入手册.md", "scenario-schema.md", "CI集成.md"]
+    # 文件名数字前缀即学习路径序：01 快速上手 → 02 接入手册 → 03 Schema → 04 CI 集成
+    assert files[:4] == ["01-快速上手.md", "02-算法接入手册.md", "03-scenario-schema.md", "04-CI集成.md"]
+    assert files == sorted(files)  # 自然名序即展示序（新增文档选号落位，无需改服务端）
     assert all(it["title"] for it in items)  # 每篇取到一级标题
     assert not any(f.startswith("scheme") for f in files)  # 内部资料不暴露
 
 
 def test_md_raw_served(client):
-    resp = client.get("/docs/md/快速上手.md")
+    resp = client.get("/docs/md/01-快速上手.md")
     assert resp.status_code == 200
     assert "markdown" in resp.headers["content-type"]
     assert resp.text.startswith("# 快速上手")

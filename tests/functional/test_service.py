@@ -197,7 +197,7 @@ def test_cli_matrix(daemon, tmp_path, capsys):
         assert len(item["results"]) == 2
 
 
-# ---- M-F2 场景清单（docs/scenario-schema.md）：多场景单 job 顺序执行 ----
+# ---- M-F2 场景清单（docs/03-scenario-schema.md）：多场景单 job 顺序执行 ----
 
 
 def _write_manifest_multi(tmp_path: Path) -> str:
@@ -270,7 +270,7 @@ def test_service_scenario_unknown_code(daemon, tmp_path):
     assert "nope" in resp["error"]
 
 
-# ---- M-F4 runtime 运行环境（docs/scenario-schema.md §5） ----
+# ---- M-F4 runtime 运行环境（docs/03-scenario-schema.md §5） ----
 
 
 def test_service_venv_runtime(daemon, tmp_path):
