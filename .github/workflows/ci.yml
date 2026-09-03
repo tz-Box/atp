@@ -13,6 +13,14 @@
 # 命名：刻意避开 autotest.yml——examples/ci/autotest.yml 是发给算法仓的自测备选模板，
 #   同名会让 Hub 的 known_workflows 野生 workflow_run 告警误报。
 #
+# tzcomm 版本策略（pin + 定时浮动，2026-09-04 定）：
+#   日常 push/PR → 取 .tzcomm-ref 钉住的 commit，CI 红绿只反映 ATP 自己的改动；
+#   每日定时     → 取 TzComm 最新分支跑一遍，这是唯一能发现"tzcomm 改动打破 ATP"
+#                  的路径，且单独成一次 run，不干扰日常 PR。
+#   两半缺一不可：只 pin 会让 tzcomm 的改动对 ATP 完全隐形（2026-09-03 生产事故
+#   正是它的极端版本——daemon 被钉在 8/23，11 天没人 bump，与客户端库版本错配）；
+#   只浮动会让别人的提交把你的 CI 搞红，红了还要先分辨是谁的锅。
+#
 # ⚠ 前置（需运维/M 提供，未提供时本 workflow 会红并给出明确指引）：
 #   仓库 secret `TZCOMM_DEPLOY_KEY` = tz-Box/TzComm 的**只读** deploy key 私钥。
 #   理由：tzcomm 是 ATP 的传输底座（pyproject 注明为环境内 editable 本地组件，不发 PyPI），
@@ -22,7 +30,15 @@ name: ci
 on:
   push:
   pull_request:
+  # 每日浮动跑：用 TzComm 最新分支跑一遍，集成漂移当天可见（见 §tzcomm 版本策略）
+  schedule:
+    - cron: "0 21 * * *"   # 21:00 UTC = 次日 05:00 北京时间
   workflow_dispatch:
+    inputs:
+      tzcomm_ref:
+        description: "临时指定 TzComm ref（留空=用 .tzcomm-ref 钉住的版本）"
+        required: false
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -47,6 +63,10 @@ jobs:
       # 不与生产实例（17888 / db0）串台
       TZCOMM_DAEMON_ADDR: 127.0.0.1:18888
       TZCOMM_REDIS_URL: redis://127.0.0.1:6379/15
+      # 每日浮动跟随哪个分支。注意 TzComm 默认分支是 master，但 dev 领先 17 个提交
+      # 且关键改动（D13 端口机制）只在 dev——跟 master 等于收不到早期信号。
+      # TzComm 合并 dev→master 后应改回 master。
+      TZCOMM_FLOAT_BRANCH: dev
     steps:
       - uses: actions/checkout@v4
 
@@ -62,12 +82,37 @@ jobs:
             exit 1
           fi
 
+      - name: 决定 TzComm 版本（pin / 浮动）
+        id: tzref
+        # 日常 push/PR 用 .tzcomm-ref 钉住的 sha：CI 红绿只反映 ATP 自己的改动。
+        # 定时任务用 TzComm 最新分支：这是唯一能发现"tzcomm 改动打破 ATP"的路径，
+        # 且它单独成一次 run，不会把日常 PR 搞红。
+        run: |
+          if [ -n "${{ inputs.tzcomm_ref }}" ]; then
+            REF="${{ inputs.tzcomm_ref }}"; MODE="手动指定"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            REF="$TZCOMM_FLOAT_BRANCH"; MODE="每日浮动"
+          else
+            REF="$(grep -v '^#' .tzcomm-ref | grep -v '^$' | head -1)"; MODE="pin"
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "::notice title=TzComm 版本::$MODE → $REF"
+
       - name: 取 TzComm（只读）
         uses: actions/checkout@v4
         with:
           repository: tz-Box/TzComm
+          ref: ${{ steps.tzref.outputs.ref }}
           ssh-key: ${{ secrets.TZCOMM_DEPLOY_KEY }}
           path: __temp__/TzComm
+
+      - name: 记录 TzComm 实际版本
+        # 排障用：失败时一眼看出测的是哪一份 tzcomm。
+        # （tzcomm 的 daemon 协议无版本查询接口、__version__ 也不随改动递增，
+        #   所以 commit sha 是目前唯一可靠的版本标识）
+        run: |
+          cd __temp__/TzComm
+          echo "::notice title=TzComm 实际 commit::$(git rev-parse HEAD) — $(git log -1 --format=%s)"
 
       - uses: actions/setup-python@v5
         with:
