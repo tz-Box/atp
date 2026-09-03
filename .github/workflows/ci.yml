@@ -1,0 +1,103 @@
+# 本仓自用 CI（E1，2026-09-03）
+#
+# 为什么需要它：本仓 297 个测试此前**没有任何自动触发路径**，只靠人记得手跑。
+# 同类事故刚在体系内发生过两次——Hub 的 267 个测试自举闭环静默断开一周无人发现、
+# ARS 的 1556 行代码长期没有版本控制。共同点是「没有任何机制会在出错时发出声音」
+# （见 Hub 仓 docs/四平台协同机制改进-2026-09-03.md G5）。
+#
+# 为什么是普通 on: push 而不是走 Hub 编排：
+#   与 Hub 仓 ci.yml 同一条理由——本仓的测试要在 Hub 挂掉时也能跑，那正是最需要它的时刻。
+#   且 ATP 是 autotest 的执行体，让它的 CI 经 Hub 派回自己是循环依赖。
+#   本 workflow 独立于编排链路：不带 correlation_id、不回调、不进 rules.repos。
+#
+# 命名：刻意避开 autotest.yml——examples/ci/autotest.yml 是发给算法仓的自测备选模板，
+#   同名会让 Hub 的 known_workflows 野生 workflow_run 告警误报。
+#
+# ⚠ 前置（需运维/M 提供，未提供时本 workflow 会红并给出明确指引）：
+#   仓库 secret `TZCOMM_DEPLOY_KEY` = tz-Box/TzComm 的**只读** deploy key 私钥。
+#   理由：tzcomm 是 ATP 的传输底座（pyproject 注明为环境内 editable 本地组件，不发 PyPI），
+#   不装它连 import autotest 都不成立。与评测机预置算法仓 deploy key（O2）是同一类配置。
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest（unit + functional）
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        # 等 Redis 真正可用再跑，避免首个用例撞上未就绪的容器
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # 与 tests/conftest.py 的缺省值对齐：测试用独立 daemon 端口与 Redis db，
+      # 不与生产实例（17888 / db0）串台
+      TZCOMM_DAEMON_ADDR: 127.0.0.1:18888
+      TZCOMM_REDIS_URL: redis://127.0.0.1:6379/15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查 TzComm 凭据已配置
+        # 缺凭据时明确报错而不是让 checkout 抛一句难懂的 git 错误。
+        # 刻意"红"而不是"跳过"：绿着但什么都没测，正是本 workflow 要消灭的那种状态。
+        run: |
+          if [ -z "${{ secrets.TZCOMM_DEPLOY_KEY }}" ]; then
+            echo "::error::缺少 secret TZCOMM_DEPLOY_KEY（tz-Box/TzComm 只读 deploy key）。"
+            echo "::error::tzcomm 是 ATP 的传输底座且不发 PyPI，无它无法 import autotest。"
+            echo "::error::配置方法：TzComm 仓 Settings → Deploy keys 建只读 key，"
+            echo "::error::私钥存入本仓 Settings → Secrets → Actions，命名 TZCOMM_DEPLOY_KEY。"
+            exit 1
+          fi
+
+      - name: 取 TzComm（只读）
+        uses: actions/checkout@v4
+        with:
+          repository: tz-Box/TzComm
+          ssh-key: ${{ secrets.TZCOMM_DEPLOY_KEY }}
+          path: __temp__/TzComm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: 安装
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./__temp__/TzComm[daemon]"
+          pip install -e ".[dev]"
+
+      - name: 起 tzcomm daemon
+        # ATP 的 conftest 刻意不自建 daemon（生产形态是系统常驻服务），
+        # 故 CI 需自行提供一个；配置全经上面的 env 注入（18888 / db15）。
+        run: |
+          nohup python -m tzcomm.cli daemon > /tmp/tzcomm-daemon.log 2>&1 &
+          for _ in $(seq 1 40); do
+            if python -c "import socket;socket.create_connection(('127.0.0.1',18888),timeout=0.5).close()" 2>/dev/null; then
+              echo "daemon up"; exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::tzcomm daemon 20s 内未就绪"; tail -100 /tmp/tzcomm-daemon.log; exit 1
+
+      - name: 测试
+        # 测试自带超时与清理，CI 上仍加总时限兜底，避免挂死占满 runner
+        timeout-minutes: 20
+        run: python -m pytest -q
+
+      - name: 失败时导出 daemon 日志
+        if: failure()
+        run: tail -200 /tmp/tzcomm-daemon.log || true
