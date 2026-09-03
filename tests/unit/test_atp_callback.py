@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from autotest.server import callback as cb
+from autotest.server import report as rp
 from autotest.server.evaluations import EvaluationStore
 
 
@@ -159,6 +160,79 @@ def test_finalize_without_callback_config(store, tmp_path, monkeypatch):
     assert any("跳过发送" in line for line in logs)
 
 
+# ---- D1：基线按 repo 隔离（本组是该缺陷的回归防线）----
+
+def test_baseline_path_isolated_per_repo():
+    """不同 repo → 不同基线文件；无 repo（本机 client 通路）→ 沿用全局文件。"""
+    root = Path("/tmp/artifacts")
+    a = rp.baseline_path_for("tz-Box/cicd_test", root)
+    b = rp.baseline_path_for("tz-Box/cicd_test_slam", root)
+    assert a != b and a.parent == b.parent == root / "baselines"
+    assert rp.baseline_path_for(None, root) == root / "baseline.json"   # 向后兼容
+    assert rp.baseline_path_for("", root) == root / "baseline.json"
+    # 归一后同名的不同 repo 仍互不覆盖（摘要后缀保证唯一性）
+    assert rp.baseline_slug("a/b") != rp.baseline_slug("a_b")
+    # GitHub 坐标大小写不敏感 → 同一仓不得分裂成两份基线（实测库中两种写法都出现过）
+    assert rp.baseline_slug("tz-Box/cicd_test") == rp.baseline_slug("tz-box/cicd_test")
+    # 本地路径大小写敏感 → 不得合并
+    assert rp.baseline_slug("/ws/Algo") != rp.baseline_slug("/ws/algo")
+
+
+def test_finalize_two_repos_do_not_overwrite_each_other(store, tmp_path, monkeypatch):
+    """★D1 回归：A 仓滚动基线后，B 仓评测既看不到 A 的基线、也不覆盖它。
+
+    修复前两仓共用 artifacts/baseline.json：B 与 A 的 testcase_id 对不上 → 永久 new，
+    且 B 滚动即抹掉 A 的基线。该症状与"多场景前缀迁移首轮全记 new"这一已知良性现象
+    完全同形，因而不会被察觉——故此处以行为断言固化。
+    """
+    monkeypatch.setenv("AUTOTEST_ARTIFACTS_DIR", str(tmp_path))
+    monkeypatch.delenv("HUB_CALLBACK_URL", raising=False)
+    monkeypatch.delenv("HUB_CALLBACK_TOKEN", raising=False)
+    store.create(cid="c2", job_id="j2", repo="tz-Box/b", ref=None, sha="sha2",
+                 save_baseline=True)
+
+    def _run(cid: str, job: str, repo: str, report: dict) -> None:
+        d = tmp_path / job
+        d.mkdir(exist_ok=True)
+        (d / "report.json").write_text(json.dumps(report), encoding="utf-8")
+        cb.finalize_evaluation(
+            {"cid": cid, "sha": "s", "repo": repo, "save_baseline": True},
+            report, store, d, lambda _m: None)
+
+    # A 仓先跑并滚动基线
+    report_a = _report()
+    _run("c1", "j1", "tz-Box/a", report_a)
+    path_a = rp.baseline_path_for("tz-Box/a", tmp_path)
+    assert path_a.is_file()
+
+    # B 仓的 testcase 命名空间完全不同
+    report_b = {"job_id": "j2", "error": None, "comm_health": {"warnings": []},
+                "results": [{"testcase_id": "slam:tc0", "passed": True,
+                             "metrics": {"ate": 0.2}, "n_records": 5}]}
+    _run("c2", "j2", "tz-Box/b", report_b)
+
+    # ① B 没读到 A 的基线（否则摘要会出现 vs_baseline: new=1 之类的错误对比）
+    assert "vs_baseline" not in store.get_by_cid("c2")["summary"]
+    # ② B 滚动后 A 的基线原样健在，内容未被顶替
+    assert json.loads(path_a.read_text(encoding="utf-8"))["results"] == report_a["results"]
+    # ③ 两份基线各自独立存在
+    assert rp.baseline_path_for("tz-Box/b", tmp_path).is_file()
+
+
+def test_finalize_same_repo_second_run_compares_against_own_baseline(store, tmp_path, monkeypatch):
+    """同一 repo 第二次评测能对上自己的基线（隔离没有把对比功能一起隔离掉）。"""
+    monkeypatch.setenv("AUTOTEST_ARTIFACTS_DIR", str(tmp_path))
+    monkeypatch.delenv("HUB_CALLBACK_URL", raising=False)
+    monkeypatch.delenv("HUB_CALLBACK_TOKEN", raising=False)
+    d = tmp_path / "j1"
+    d.mkdir()
+    (d / "report.json").write_text(json.dumps(_report()), encoding="utf-8")
+    ctx = {"cid": "c1", "sha": "s", "repo": "tz-Box/a", "save_baseline": True}
+    cb.finalize_evaluation(ctx, _report(), store, d, lambda _m: None)   # 首轮：建基线
+    cb.finalize_evaluation(ctx, _report(), store, d, lambda _m: None)   # 次轮：应对上
+    assert "vs_baseline: same=2" in store.get_by_cid("c1")["summary"]
+
+
 def test_finalize_sends_callback_with_vs_baseline(store, tmp_path, monkeypatch, hub):
     """配置后：先发回调（摘要含 vs_baseline），后滚动基线（先对比后滚动语义）。"""
     monkeypatch.setenv("AUTOTEST_ARTIFACTS_DIR", str(tmp_path))
@@ -180,8 +254,8 @@ def test_finalize_sends_callback_with_vs_baseline(store, tmp_path, monkeypatch, 
     payload = _MockHub.received[0]
     assert payload["correlation_id"] == "c1" and payload["sha"] == "sha1"
     assert payload["conclusion"] == "success"
-    # 既有 compare 语义（M-D3）：deltas 全非正（含零差）即 improved → tc0 改善 + tc1 持平 = improved=2
-    assert "vs_baseline: improved=2" in payload["report"]["summary"]
+    # compare 语义：tc0 指标变好 → improved；tc1 逐项持平 → same（不计入 improved）
+    assert "vs_baseline: improved=1, same=1" in payload["report"]["summary"]
     assert _MockHub.auths == ["Bearer tok"]
     # 先对比后滚动：回调摘要基于旧基线，滚动后的新基线=本轮报告
     rolled = json.loads((tmp_path / "baseline.json").read_text(encoding="utf-8"))

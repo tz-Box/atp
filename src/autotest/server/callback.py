@@ -24,7 +24,7 @@ from typing import Callable, Optional
 
 from .artifacts import ArtifactRecorder, artifacts_root
 from .evaluations import EvaluationStore, conclusion_of
-from .report import compare, load_baseline, save_baseline
+from .report import baseline_path_for, compare, load_baseline, save_baseline
 
 _CALLBACK_TIMEOUT = 15.0
 _RETRY_BACKOFF = (1.0, 5.0, 15.0)  # 首发失败后的三次退避（共 4 发）
@@ -54,9 +54,14 @@ def summarize(report: dict, changes: Optional[dict] = None) -> str:
     return "; ".join([head, *parts])
 
 
-def regression_changes(report: dict) -> Optional[dict]:
-    """与 artifacts/baseline.json 对比（先对比后滚动），返回 changes 计数；无基线返回 None。"""
-    baseline = load_baseline(artifacts_root() / "baseline.json")
+def regression_changes(report: dict, repo: Optional[str] = None) -> Optional[dict]:
+    """与该 repo 的基线对比（先对比后滚动），返回 changes 计数；无基线返回 None。
+
+    D1：基线按 repo 隔离。全局单文件时多算法仓会互相覆盖，双方回归对比同时
+    退化为永久 `new`（且与"多场景前缀迁移首轮全记 new"这一已知良性现象同形，
+    不会被察觉）。repo 为空（本机 client 通路）沿用全局文件，行为不变。
+    """
+    baseline = load_baseline(baseline_path_for(repo, artifacts_root()))
     if baseline is None:
         return None
     changes: dict[str, int] = {}
@@ -115,13 +120,14 @@ def finalize_evaluation(eval_ctx: dict, report: dict, store: EvaluationStore,
     """
     cid = eval_ctx["cid"]
     conclusion = conclusion_of(report.get("error"), report.get("results", []))
-    changes = regression_changes(report)  # 先对比
+    repo = eval_ctx.get("repo")
+    changes = regression_changes(report, repo)  # 先对比（基线按 repo 隔离，D1）
     summary = summarize(report, changes)
     store.update_terminal(cid, status=conclusion, summary=summary,
                           finished_at=datetime.now(timezone.utc).isoformat())
     # 后滚动：save_baseline=true 且 success 时基线前进（对齐 M-D3 CI 语义）
     if eval_ctx.get("save_baseline") and conclusion == "success":
-        target = save_baseline(report_dir)
+        target = save_baseline(report_dir, baseline_path_for(repo, artifacts_root()))
         log(f"[baseline] 基线已滚动: {target}")
 
     url = os.environ.get("HUB_CALLBACK_URL", "").strip()

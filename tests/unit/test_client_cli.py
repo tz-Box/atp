@@ -99,8 +99,9 @@ def test_report_json_compare_with_baseline(monkeypatch, tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["job_id"] == "autotest-j1"
     assert out["has_baseline"] is True
-    # a 指标持平（delta=0 → improved），b passed 反转 → regressed
-    assert out["changes"] == {"improved": 1, "regressed": 1}
+    # a 指标逐项持平 → same（不是 improved：什么都没变不该报成变好了）；
+    # b passed 反转 → regressed（passed 翻转优先于指标增减）
+    assert out["changes"] == {"same": 1, "regressed": 1}
     assert len(out["rows"]) == 2
 
 
