@@ -254,7 +254,7 @@
 > 定位:测试定义权威在被测仓内,ATP 是通用执行器——不存在"ATP 端测试目录"接口。
 > 排期:`Schema(先行,Hub scenario 勾选依赖) → scenario 生效 → venv(F1) → docker(F2,中期)`。
 
-- [x] **M-F1 scenario.yaml Schema 权威定义**(R2 核心,先行项,**已收口 2026-08-26**):[scenario-schema.md](../../03-scenario-schema.md)——
+- [x] **M-F1 scenario.yaml Schema 权威定义**(R2 核心,先行项,**已收口 2026-08-26**):[scenario-schema.md](../../07-附录-scenario-yaml-schema.md)——
   三层模型(manifest→场景文件→执行面);manifest 全字段表 + **scenarios 场景清单**(id ^[a-z0-9_]+$/description/
   scenario 引用/hyperparams·checker_config·dataset_config 深合并覆盖/baseline 仓内参考基线)+ **runtime 声明**
   (host|venv|docker,缺省 host 零迁移,与旧 image 字段关系厘清)+ submit.scenario 语义(null|id|[ids]|路径旧语义过渡)
@@ -293,7 +293,7 @@
   rules.repos checks 项 scenario 字段、`_dispatch_atp` 透传 scenario、atp_pool 界面化(∥ N2c)、T1c 改造(等 PMS)
 - **PMS 主责(R1+R4)**:task_repos 绑定模型 + `GET /pms/tasks?repo=` 语义变更 + 任务卡 CI 结果区块——ATP 无配合项
 - **契约变更(§3.3,已双向确认)**:`POST /atp/evaluations` scenario 字段激活语义 + 4xx code 字段——
-  **ATP 侧已就绪(M-F2/M-F3,2026-08-26)**,Hub 可对照 [scenario-schema.md](../../03-scenario-schema.md) §7/§8 对接
+  **ATP 侧已就绪(M-F2/M-F3,2026-08-26)**,Hub 可对照 [scenario-schema.md](../../07-附录-scenario-yaml-schema.md) §7/§8 对接
 
 #### 批次 E 建议开工顺序(本仓内,不依赖外部)
 
