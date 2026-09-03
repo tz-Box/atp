@@ -1,4 +1,4 @@
-"""运行环境准备单测（M-F4，docs/03-scenario-schema.md §5）。
+"""运行环境准备单测（M-F4，docs/07-附录-scenario-yaml-schema.md §5）。
 
 覆盖：host 透传 / docker F1 期明确报错 / venv 创建·复用·PATH 前置 / requirements 缺失与失败语义。
 """

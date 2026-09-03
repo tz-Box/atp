@@ -1,4 +1,4 @@
-"""评测运行环境准备（M-F4，docs/03-scenario-schema.md §5）。
+"""评测运行环境准备（M-F4，docs/07-附录-scenario-yaml-schema.md §5）。
 
 runtime.type:
 - host（缺省）：零处理，宿主机直跑（现状零迁移）；

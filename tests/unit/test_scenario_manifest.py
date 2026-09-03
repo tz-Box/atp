@@ -1,4 +1,4 @@
-"""场景清单与 runtime 声明单测（M-F1~M-F3，Schema 权威 docs/03-scenario-schema.md）。
+"""场景清单与 runtime 声明单测（M-F1~M-F3，Schema 权威 docs/07-附录-scenario-yaml-schema.md）。
 
 覆盖：
 - scenarios 清单解析与校验（id 形态/重复/缺字段/非列表）；
