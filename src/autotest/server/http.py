@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 import tzcomm
 
+from .. import CONTRACT_VERSION
 from ..commcheck import check_daemon
 from ..registry import available_bodies, available_plugins
 from . import auth
@@ -125,7 +126,7 @@ def create_app(service: AutotestService) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict:
-        return {"ok": True, "jobs": service.job_count}
+        return {"ok": True, "jobs": service.job_count, "contract": CONTRACT_VERSION}
 
     # 注意：job_status 成功时也带 "error": None 键，错误判定须用真值而非键存在
     @app.post("/api/submit")
@@ -207,6 +208,7 @@ def create_app(service: AutotestService) -> FastAPI:
         return {
             "ok": daemon.ok,
             "version": _atp_version(),
+            "contract": CONTRACT_VERSION,  # v1.7-R12：已实现到哪版总契约（非包版本）
             "tzcomm": daemon.ok,
             "queue": service.queue_depth,
         }
@@ -220,6 +222,7 @@ def create_app(service: AutotestService) -> FastAPI:
         """
         return {
             "version": _atp_version(),
+            "contract": CONTRACT_VERSION,  # v1.7-R12
             "plugins": available_plugins(),
             "bodies": available_bodies(),
             "resources": {"gpu": shutil.which("nvidia-smi") is not None, "sensors": []},

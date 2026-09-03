@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from autotest import CONTRACT_VERSION
 from autotest.server.http import create_app
 
 
@@ -50,7 +51,7 @@ def _client() -> TestClient:
 def test_health():
     resp = _client().get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "jobs": 0}
+    assert resp.json() == {"ok": True, "jobs": 0, "contract": CONTRACT_VERSION}
 
 
 def test_submit_ok_strips_none_fields():

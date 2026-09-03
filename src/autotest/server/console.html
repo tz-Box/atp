@@ -70,6 +70,7 @@
     <div class="grid">
       <div class="stat"><div class="k">状态</div><div class="v" id="h-ok">-</div></div>
       <div class="stat"><div class="k">版本</div><div class="v" id="h-ver">-</div></div>
+      <div class="stat"><div class="k">契约版本</div><div class="v" id="h-contract">-</div></div>
       <div class="stat"><div class="k">tzcomm</div><div class="v" id="h-tz">-</div></div>
       <div class="stat"><div class="k">排队深度</div><div class="v" id="h-q">-</div></div>
     </div>
@@ -159,6 +160,7 @@ async function refreshHealth() {
     $("h-ok").className = "v " + (h.ok ? "ok" : "bad");
     $("h-ver").textContent = h.version ?? "-";
     $("hdr-ver").textContent = "v" + (h.version ?? "?");
+    $("h-contract").textContent = h.contract ? "v" + h.contract : "-";   // v1.7-R12
     $("h-tz").textContent = h.tzcomm ? "ok" : "down";
     $("h-tz").className = "v " + (h.tzcomm ? "ok" : "bad");
     $("h-q").textContent = h.queue ?? 0;

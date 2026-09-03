@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from autotest import CONTRACT_VERSION
 from autotest.manifest import is_scenario_path
 from autotest.server.checkout import CheckoutError, locate_manifest, resolve_checkout
 from autotest.server.evaluations import EvaluationStore, conclusion_of
@@ -307,9 +308,11 @@ def test_atp_health_fields(env):
     resp = client.get("/atp/health")  # 探活无需认证
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body) == {"ok", "version", "tzcomm", "queue"}
+    assert set(body) == {"ok", "version", "contract", "tzcomm", "queue"}
     assert isinstance(body["version"], str) and body["version"]
     assert body["queue"] == 0
+    # v1.7-R12：contract 是"已实现到哪版总契约"，与包版本分离；Hub 探活时比对
+    assert body["contract"] == CONTRACT_VERSION
 
 
 def test_atp_health_tzcomm_unreachable_degrades(env, monkeypatch):
@@ -378,7 +381,8 @@ def test_capabilities_fields(env):
     resp = client.get("/atp/capabilities")  # 无认证（Hub 探活采集）
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body) == {"version", "plugins", "bodies", "resources", "queue"}
+    assert set(body) == {"version", "contract", "plugins", "bodies", "resources", "queue"}
+    assert body["contract"] == CONTRACT_VERSION  # v1.7-R12
     assert "ctrl.invp" in body["plugins"]  # 扫描仓内 plugins/ 目录（静态事实）
     assert "pipe.slam" in body["plugins"]
     assert "invp_sim" in body["bodies"]    # body/*.yaml stem
