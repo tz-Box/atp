@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import hmac
 import importlib.metadata
 import os
@@ -28,6 +30,7 @@ from ..commcheck import check_daemon
 from ..registry import available_bodies, available_plugins
 from . import auth
 from .auth import current_user
+from .selfcheck import TzcommSelfCheck
 from .server import AutotestService
 
 DEFAULT_HTTP_PORT = 2335
@@ -119,9 +122,22 @@ def _raise_auth_unavailable_or_401() -> None:
 
 def create_app(service: AutotestService) -> FastAPI:
     """在既有 AutotestService 上挂 HTTP 路由（与 tzcomm 面共享 Jobs 池）。"""
+    # tzcomm 数据面后台自检（结果供 /atp/health 即时读取）。
+    # service=None 的纯路由测试不起——那类用例不碰 tzcomm，起了只会白等 daemon。
+    selfcheck = TzcommSelfCheck()
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        if service is not None:
+            selfcheck.start()
+        try:
+            yield
+        finally:
+            selfcheck.stop()
+
     # Swagger 挪 /api/docs：/docs 让给算法工程师文档门户（ docs.html ）
     app = FastAPI(title="autotest-service", version="0.1.0",
-                  docs_url="/api/docs", redoc_url=None)
+                  docs_url="/api/docs", redoc_url=None, lifespan=_lifespan)
     app.include_router(auth.router)  # M-E11 飞书登录（人通道，与 Bearer 机器通道分层并存）
 
     @app.get("/health")
@@ -203,14 +219,34 @@ def create_app(service: AutotestService) -> FastAPI:
 
     @app.get("/atp/health")
     def atp_health() -> dict:
-        # tzcomm daemon 快检（socket connect 带超时，不经评测队列）；ATP 无 tzcomm 即不可评测 → ok=False
-        daemon = check_daemon(timeout=0.5)
+        """契约 §4.8 探活。Hub 据 ok 决定是否把评测派到本机，故必须即时响应。
+
+        tzcomm 判定 = daemon 端口可达 **且** 数据面回环通过（后台自检的缓存结果）。
+        只看端口是不够的：2026-09-03 生产事故里 daemon 与客户端库版本错配，
+        端口一直在监听、数据面完全不通，而 health 一路报健康（见 selfcheck 模块）。
+        """
+        daemon = check_daemon(timeout=0.5)  # 快检，不经评测队列
+        probe = selfcheck.snapshot()
+        loopback = probe["loopback"]
+        # 首轮自检未完成（loopback is None）时退回仅 daemon 判定，不假装已验过；
+        # 该窗口约 1 秒，detail.checked_at=None 可据此识别
+        healthy = daemon.ok if loopback is None else (daemon.ok and loopback)
         return {
-            "ok": daemon.ok,
+            "ok": healthy,
             "version": _atp_version(),
             "contract": CONTRACT_VERSION,  # v1.7-R12：已实现到哪版总契约（非包版本）
-            "tzcomm": daemon.ok,
+            # 保持 bool：Hub 侧按真值判定路由跳过，改成对象会恒真（对象永远 truthy），
+            # 反而把"不健康"变成静默通过——正是本次要修的那类故障
+            "tzcomm": healthy,
             "queue": service.queue_depth,
+            # 新增字段（向后兼容）：排障用明细，回答"到底哪一层断了"
+            "tzcomm_detail": {
+                "daemon": daemon.ok,
+                "loopback": loopback,
+                "lib_version": probe["lib_version"],
+                "checked_at": probe["checked_at"],
+                "error": probe["error"],
+            },
         }
 
     @app.get("/atp/capabilities")

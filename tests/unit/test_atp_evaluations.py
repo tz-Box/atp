@@ -308,11 +308,56 @@ def test_atp_health_fields(env):
     resp = client.get("/atp/health")  # 探活无需认证
     assert resp.status_code == 200
     body = resp.json()
-    assert set(body) == {"ok", "version", "contract", "tzcomm", "queue"}
+    assert set(body) == {"ok", "version", "contract", "tzcomm", "queue", "tzcomm_detail"}
+    # tzcomm 保持 bool：Hub 按真值判路由跳过，换成对象会恒真（对象永远 truthy）
+    assert isinstance(body["tzcomm"], bool)
+    assert set(body["tzcomm_detail"]) == {"daemon", "loopback", "lib_version",
+                                          "checked_at", "error"}
     assert isinstance(body["version"], str) and body["version"]
     assert body["queue"] == 0
     # v1.7-R12：contract 是"已实现到哪版总契约"，与包版本分离；Hub 探活时比对
     assert body["contract"] == CONTRACT_VERSION
+
+
+def test_atp_health_degrades_when_loopback_fails(env, monkeypatch):
+    """★数据面回环失败 → ok/tzcomm 判不健康（Hub 据此跳过路由）。
+
+    2026-09-03 生产事故的回归防线：daemon 端口一直在监听、数据面完全不通
+    （daemon 与客户端库版本错配），而 health 一路报健康，Hub 一路往这台机器派评测。
+    只检查端口是不够的——必须真发一条、真收一条。
+    """
+    from autotest.server import http as http_mod
+    from autotest.server.selfcheck import TzcommSelfCheck
+    from autotest.commcheck import CheckResult
+
+    # 两个输入都固定，测的是"端口通 + 回环断"这个组合的判定规则本身，
+    # 不依赖跑测试的机器上 daemon 是什么状态
+    monkeypatch.setattr(http_mod, "check_daemon",
+                        lambda timeout=0.5: CheckResult(name="daemon", ok=True))
+    monkeypatch.setattr(TzcommSelfCheck, "snapshot", lambda self: {
+        "loopback": False, "checked_at": "2026-09-03T00:00:00+00:00",
+        "error": "回环 3.0s 内未收到消息", "lib_version": "0.1.0"})
+    _, _, _, client = env
+    body = client.get("/atp/health").json()
+    assert body["ok"] is False and body["tzcomm"] is False
+    assert body["tzcomm_detail"]["daemon"] is True      # 端口是通的——正是迷惑人的地方
+    assert body["tzcomm_detail"]["loopback"] is False   # 数据面不通才是真相
+
+
+def test_atp_health_before_first_probe_falls_back_to_daemon(env, monkeypatch):
+    """首轮自检未完成时退回仅 daemon 判定，且 checked_at=None 如实标注未验过。"""
+    from autotest.server import http as http_mod
+    from autotest.server.selfcheck import TzcommSelfCheck
+    from autotest.commcheck import CheckResult
+
+    monkeypatch.setattr(http_mod, "check_daemon",
+                        lambda timeout=0.5: CheckResult(name="daemon", ok=True))
+    monkeypatch.setattr(TzcommSelfCheck, "snapshot", lambda self: {
+        "loopback": None, "checked_at": None, "error": None, "lib_version": "0.1.0"})
+    _, _, _, client = env
+    body = client.get("/atp/health").json()
+    assert body["ok"] is True                       # 不因"还没验"就判死
+    assert body["tzcomm_detail"]["checked_at"] is None  # 但如实说明尚未验过
 
 
 def test_atp_health_tzcomm_unreachable_degrades(env, monkeypatch):

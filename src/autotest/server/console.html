@@ -72,6 +72,7 @@
       <div class="stat"><div class="k">版本</div><div class="v" id="h-ver">-</div></div>
       <div class="stat"><div class="k">契约版本</div><div class="v" id="h-contract">-</div></div>
       <div class="stat"><div class="k">tzcomm</div><div class="v" id="h-tz">-</div></div>
+      <div class="stat"><div class="k">tzcomm 明细</div><div class="v" id="h-tzd" style="font-size:12px">-</div></div>
       <div class="stat"><div class="k">排队深度</div><div class="v" id="h-q">-</div></div>
     </div>
   </div>
@@ -163,6 +164,12 @@ async function refreshHealth() {
     $("h-contract").textContent = h.contract ? "v" + h.contract : "-";   // v1.7-R12
     $("h-tz").textContent = h.tzcomm ? "ok" : "down";
     $("h-tz").className = "v " + (h.tzcomm ? "ok" : "bad");
+    // tzcomm 明细：端口通 ≠ 数据面通，两层分开显示才能一眼定位断在哪
+    const d = h.tzcomm_detail || {};
+    const lb = d.loopback === null || d.loopback === undefined ? "未验" : (d.loopback ? "通" : "断");
+    $("h-tzd").textContent = `daemon ${d.daemon ? "通" : "断"} / 回环 ${lb} / lib ${d.lib_version || "?"}`
+      + (d.error ? ` · ${d.error}` : "");
+    $("h-tzd").className = "v " + (d.loopback === false ? "bad" : (d.loopback ? "ok" : "warn"));
     $("h-q").textContent = h.queue ?? 0;
     $("h-q").className = "v " + (h.queue > 0 ? "warn" : "");
   } catch (e) { $("h-ok").textContent = "unreachable"; $("h-ok").className = "v bad"; }
