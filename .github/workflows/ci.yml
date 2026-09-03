@@ -80,24 +80,14 @@ jobs:
           pip install -e "./__temp__/TzComm[daemon]"
           pip install -e ".[dev]"
 
-      - name: 起 tzcomm daemon
-        # ATP 的 conftest 刻意不自建 daemon（生产形态是系统常驻服务），
-        # 故 CI 需自行提供一个；配置全经上面的 env 注入（18888 / db15）。
-        run: |
-          nohup python -m tzcomm.cli daemon > /tmp/tzcomm-daemon.log 2>&1 &
-          for _ in $(seq 1 40); do
-            if python -c "import socket;socket.create_connection(('127.0.0.1',18888),timeout=0.5).close()" 2>/dev/null; then
-              echo "daemon up"; exit 0
-            fi
-            sleep 0.5
-          done
-          echo "::error::tzcomm daemon 20s 内未就绪"; tail -100 /tmp/tzcomm-daemon.log; exit 1
+      # daemon 由 tests/conftest.py 的 daemon fixture 自起（探测不可达才起，
+      # 会话结束收掉），故此处无需单独拉起——本地与 CI 走同一条路径。
 
       - name: 测试
         # 测试自带超时与清理，CI 上仍加总时限兜底，避免挂死占满 runner
         timeout-minutes: 20
         run: python -m pytest -q
 
-      - name: 失败时导出 daemon 日志
+      - name: 失败时导出 tzcomm 日志
         if: failure()
-        run: tail -200 /tmp/tzcomm-daemon.log || true
+        run: tail -200 "$HOME/.tzcomm/daemon.log" 2>/dev/null || echo "(无 daemon 日志)"

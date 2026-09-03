@@ -29,6 +29,9 @@ _LOSS_WARN_RATE = 0.01  # 1%
 # 与 tzcomm.config.Config 的 daemon_addr 缺省保持一致（单一事实源在 tzcomm 侧）
 _DEFAULT_DAEMON = "127.0.0.1:17888"
 
+# 回环发送节流：留出回调取件时间，避免撞上订阅队列深度（见 check_pubsub）
+_PACE_S = 0.002
+
 
 def _daemon_addr() -> tuple[str, int]:
     """tzcomm daemon 地址（TZCOMM_DAEMON_ADDR，缺省与 tzcomm Config 一致 17888）。"""
@@ -92,10 +95,37 @@ def check_pubsub(messages: int = 50, timeout: float = 5.0) -> CheckResult:
     try:
         node.create_subscription(probe, _on_msg, qos=1)
         pub = node.create_publisher(probe, qos=1)
-        time.sleep(0.5)  # 等发现层完成 pub/sub 互发现（本地回环足够）
+        # 等发现层撮合 pub/sub 的 TCP 连接。**不能用固定 sleep**：qos=1 的"可靠"
+        # 只在连接建立之后成立，早发的消息会被直接丢弃。原实现固定 sleep(0.5) 后
+        # 一次性灌 50 条，机器有负载时连接还没建好，实测出现 42/50 这种数字——
+        # 而这是**诊断工具**，假 FAIL 会把人送去排查根本不存在的丢包问题。
+        # 改为发探测帧直到收到第一条为止（不计入统计），确认通路真的活了再开始测。
+        warm_deadline = time.monotonic() + timeout
+        while time.monotonic() < warm_deadline:
+            pub.publish({"seq": -1, "sent_at": time.monotonic()})
+            time.sleep(0.05)
+            if received:
+                break
+        if not received:
+            return CheckResult(
+                "pubsub", False, {"topic": probe, "sent": 0, "recv": 0},
+                f"预热 {timeout}s 内未建立 pub/sub 通路",
+                hint="发现层未撮合成功——查 daemon 是否与客户端库同版本（daemon 无版本查询接口，"
+                     "必要时重启 daemon 后复测）",
+            )
+        # 预热帧的延迟样本无意义，清掉；丢包计数不需要重置——tzcomm 的 gap 统计只在
+        # 已有前序 seq 时才计丢（_stats.py），首条到达的帧只用于建立基线，
+        # 预热期未送达的帧不会被算成丢包。
+        received.clear()
         start = time.monotonic()
         for i in range(messages):
             pub.publish({"seq": i, "sent_at": time.monotonic()})
+            # 必须节流：订阅投递队列默认深度 10（KEEP_LAST，对齐 ROS2），
+            # 无节流地一次灌 50 条会在传输层之外被队列丢弃——现象是
+            # `gap_lost=0` 但 recv < sent（传输层什么都没丢，回调没取完）。
+            # 原实现无节流，实测稳定 30~49/50，把一个**诊断工具**变成了假 FAIL 源。
+            # 真实 obs 推流本就受 clock_rate 节拍约束，节流后测的才是链路本身。
+            time.sleep(_PACE_S)
         done.wait(timeout)
         elapsed = time.monotonic() - start
         stats = node.network_stats()
