@@ -56,10 +56,25 @@ def scenario_outcomes(results: list[dict],
             b["passed"] += 1
         elif r.get("passed") is False:
             b["failed"] += 1
+
+    # ★以**声明的场景清单**为准枚举，而不是以观测到的结果为准。
+    # 否则一个「一条 testcase 都没产出」的场景（World.testcases 为空、数据源没给帧）
+    # 会从报文里**静默消失**——met/unmet 都不加一，结论照报 success，没人知道它没跑过。
+    # 这与消费侧「解析完整性自检」是同一件事的生产侧：**报文要能发现自己漏了东西**。
+    names = list(expects) or list(buckets)
+    for name in buckets:                      # 结果里出现了但未声明的（异常情形），也列出
+        if name not in names:
+            names.append(name)
     out = []
-    for name, b in buckets.items():
-        actual = "fail" if b["failed"] > 0 else "pass"
+    for name in names:
+        b = buckets.get(name)
         expected = expects.get(name, "pass")
+        if b is None:
+            # 声明了却没有任何结果：既非 pass 也非 fail，恒判不符合预期
+            out.append({"name": name, "expected": expected, "actual": "none",
+                        "met": False, "testcases": {"passed": 0, "failed": 0}})
+            continue
+        actual = "fail" if b["failed"] > 0 else "pass"
         out.append({"name": name, "expected": expected, "actual": actual,
                     "met": actual == expected, "testcases": b})
     return out

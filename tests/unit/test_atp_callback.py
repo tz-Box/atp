@@ -405,3 +405,24 @@ def test_summary_fixtures_regenerated_and_current():
     data = json.loads(before)
     # 四态里最容易被埋掉的那个：expect=fail 却通过了
     assert data["unexpected_pass"]["metrics"]["scenario_counts"] == {"met": 0, "unmet": 1}
+
+
+def test_declared_scenario_with_no_results_does_not_vanish():
+    """★声明了却一条 testcase 都没产出的场景，必须在报文里现形。
+
+    此前 scenario_outcomes 以**观测到的结果**为准枚举，于是这类场景（World.testcases
+    为空、数据源没给帧）从 metrics 里静默消失：met/unmet 都不加一，结论照报 success，
+    没人知道它没跑过。改为以**声明的场景清单**为准枚举。
+
+    这与消费侧的「解析完整性自检」是同一件事的生产侧——**报文要能发现自己漏了东西**。
+    """
+    from autotest.server.evaluations import conclusion_of, scenario_outcomes
+
+    expects = {"smoke": "pass", "empty": "pass"}
+    results = [{"testcase_id": "smoke:tc0", "passed": True}]
+    out = {o["name"]: o for o in scenario_outcomes(results, expects)}
+    assert set(out) == {"smoke", "empty"}, "声明的场景不得缺席"
+    assert out["empty"]["actual"] == "none" and out["empty"]["met"] is False
+    assert out["empty"]["testcases"] == {"passed": 0, "failed": 0}
+    # 结论必须因此判失败——「没跑过」不能被当成「通过了」
+    assert conclusion_of(None, results, expects) == "failure"

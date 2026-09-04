@@ -58,6 +58,11 @@ CASES = {
          {"testcase_id": "bad:<scenario>", "passed": False, "metrics": None, "n_records": 0,
           "error": "场景 bad 执行失败: RegistryError"}],
         [{"id": "bad"}]),
+    # ★声明了却一条 testcase 都没产出：actual="none"，恒判不符合预期。
+    # 不这么做它会从报文里静默消失——met/unmet 都不加一，结论照报 success。
+    "scenario_declared_but_empty": _rep(
+        [{"testcase_id": "smoke:tc0", "passed": True, "metrics": {"ate_rmse": 0.0}, "n_records": 20}],
+        [{"id": "smoke", "expect": "pass"}, {"id": "empty", "expect": "pass"}]),
     # ★expect=fail 却通过了：不是失败，是**判据坏了**（A11 四态里的第四态）
     "unexpected_pass": _rep(
         [{"testcase_id": "degraded:tc0", "passed": True, "metrics": {"ate_rmse": 0.01}, "n_records": 20}],

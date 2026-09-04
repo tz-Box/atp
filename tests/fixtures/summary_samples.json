@@ -164,6 +164,42 @@
       }
     }
   },
+  "scenario_declared_but_empty": {
+    "summary": "1/2 场景符合预期（testcase 1/1 passed）; smoke:tc0: passed (ate_rmse=0.0000)",
+    "metrics": {
+      "scenarios": [
+        {
+          "name": "smoke",
+          "expected": "pass",
+          "actual": "pass",
+          "met": true,
+          "testcases": {
+            "passed": 1,
+            "failed": 0
+          }
+        },
+        {
+          "name": "empty",
+          "expected": "pass",
+          "actual": "none",
+          "met": false,
+          "testcases": {
+            "passed": 0,
+            "failed": 0
+          }
+        }
+      ],
+      "scenario_counts": {
+        "met": 1,
+        "unmet": 1
+      },
+      "testcases": {
+        "passed": 1,
+        "failed": 0,
+        "total": 1
+      }
+    }
+  },
   "unexpected_pass": {
     "summary": "0/1 场景符合预期（testcase 1/1 passed）; degraded:tc0: passed (ate_rmse=0.0100)",
     "metrics": {
