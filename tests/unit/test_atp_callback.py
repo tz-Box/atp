@@ -359,3 +359,49 @@ def test_a11_absent_expects_keeps_old_semantics():
     results = [{"testcase_id": "tc0", "passed": False}]
     assert conclusion_of(None, results) == "failure"
     assert conclusion_of(None, results, {}) == "failure"
+
+
+# ---- summary 三分支（2026-09-05 由生成真实夹具时暴露）----
+
+def test_summary_labels_metricless_failures_as_failed_not_dataflow():
+    """★无 metrics 的失败条目必须标 failed，不能标「数据流验证」。
+
+    <runtime>（环境准备失败）与 <scenario>（装配失败）本就跑不到打分，故无 metrics。
+    此前按「有无 metrics」二分，把它们一律标成「数据流验证」——而它们恰恰是最需要被
+    看见的那类失败；且消费方的逐场景解析只认 passed|failed，这些行连匹配都匹配不到，
+    在展示里静默消失。passed=None（省略 checker，未打分）才是真正的「数据流验证」。
+    """
+    r = {"job_id": "j", "error": None, "comm_health": {"warnings": []}, "scenarios": [],
+         "results": [
+             {"testcase_id": "<runtime>", "passed": False, "metrics": None, "n_records": 0,
+              "error": "运行环境准备失败: venv 创建失败"},
+             {"testcase_id": "probe:tc0", "passed": None, "metrics": None, "n_records": 42},
+         ]}
+    text = cb.summarize(r)
+    assert "<runtime>: failed (运行环境准备失败: venv 创建失败)" in text
+    assert "probe:tc0: 数据流验证 records=42" in text   # passed=None 仍是数据流验证
+    assert "<runtime>: 数据流验证" not in text
+
+
+def test_summary_fixtures_regenerated_and_current():
+    """夹具与当前实现一致——改了 summarize/build_metrics 要重跑生成脚本。
+
+    夹具是交给消费方做回归的（Hub console 的文本兜底）。它若与实现漂移，
+    消费方就会照着过期格式写解析——那正是这份夹具要防的事。
+    """
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    fixture = root / "tests" / "fixtures" / "summary_samples.json"
+    assert fixture.is_file(), "夹具缺失，跑 python3 scripts/gen_summary_samples.py"
+    before = fixture.read_text(encoding="utf-8")
+    subprocess.run([sys.executable, str(root / "scripts" / "gen_summary_samples.py")],
+                   check=True, capture_output=True)
+    assert fixture.read_text(encoding="utf-8") == before, (
+        "夹具与实现已漂移 → 跑 python3 scripts/gen_summary_samples.py 重新生成")
+    data = json.loads(before)
+    # 四态里最容易被埋掉的那个：expect=fail 却通过了
+    assert data["unexpected_pass"]["metrics"]["scenario_counts"] == {"met": 0, "unmet": 1}

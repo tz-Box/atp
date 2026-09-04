@@ -50,10 +50,20 @@ def summarize(report: dict, changes: Optional[dict] = None) -> str:
         head = f"{n_passed}/{len(results)} passed"
     parts = []
     for r in results:
-        if r.get("metrics"):
-            metrics = ", ".join(f"{k}={v:.4f}" for k, v in r["metrics"].items())
-            parts.append(f"{r['testcase_id']}: {'passed' if r.get('passed') else 'failed'} ({metrics})")
-        else:
+        # 三分支，不能按「有无 metrics」二分：<runtime> / <scenario> 这类失败条目
+        # 本就没有 metrics（它们压根没跑到打分），此前被一律标成「数据流验证」——
+        # 而它们恰恰是**装配/环境失败**，是最需要被看见的那类。消费方的正则只认
+        # passed|failed，于是这些行连匹配都匹配不到，在逐场景清单里静默消失。
+        # （2026-09-05 生成真实夹具时发现；手编样例覆盖不到这条路径。）
+        if r.get("passed") is False:
+            detail = (", ".join(f"{k}={v:.4f}" for k, v in r["metrics"].items())
+                      if r.get("metrics") else (r.get("error") or "无指标"))
+            parts.append(f"{r['testcase_id']}: failed ({detail})")
+        elif r.get("passed") is True:
+            metrics = ", ".join(f"{k}={v:.4f}" for k, v in (r.get("metrics") or {}).items())
+            parts.append(f"{r['testcase_id']}: passed ({metrics})" if metrics
+                         else f"{r['testcase_id']}: passed")
+        else:  # passed is None —— 未打分（场景省略 checker），不是失败
             parts.append(f"{r['testcase_id']}: 数据流验证 records={r.get('n_records', 0)}")
     warnings = (report.get("comm_health") or {}).get("warnings") or []
     if warnings:
