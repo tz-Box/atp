@@ -358,3 +358,30 @@ def test_job_timeout_aborts_job(daemon, tmp_path, monkeypatch):
     assert row["passed"] is False
     assert "评测超时" in row["error"]
     assert "AUTOTEST_JOB_TIMEOUT" in row["error"]  # 报文里给出可调之处
+
+
+def test_local_run_recorded_in_evaluations(daemon, tmp_path):
+    """★本机通路（client run）的评测也要进 evaluations 表，否则 console 里查无此事。
+
+    console 被定位为"单机执行面运维视图（本机排队/结果）"，但此前只有 Hub 直连通路
+    写这张表——本机跑的评测一条都不显示。2026-09-04 实测撞上：本机跑通了
+    cicd_test_slam，console 列表里还停在两周前的记录，看上去像"服务没接到任务"。
+    """
+    from autotest.server.artifacts import artifacts_root
+    from autotest.server.evaluations import EvaluationStore
+
+    manifest_path = _write_manifest(tmp_path)
+    service = _start_service()
+    try:
+        resp = _submit(manifest_path)
+    finally:
+        service.close()
+    assert not resp.get("error"), resp
+
+    store = EvaluationStore(artifacts_root() / "atp.db")
+    row = store.get_by_job_id(resp["job_id"])
+    assert row is not None, "本机通路的评测没进 evaluations 表 → console 看不见"
+    assert row["check_type"] == "local"       # 供展示层与 Hub 直连结果区分
+    assert row["status"] == "success"         # 终态已回写（不发回调）
+    assert row["summary"] and "passed" in row["summary"]
+    assert row["repo"] == str(tmp_path)       # 本机通路以 manifest 所在目录为 repo

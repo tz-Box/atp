@@ -16,6 +16,7 @@ import queue
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -33,11 +34,11 @@ from ..protocol import topics
 from ..registry import get_checker, get_dataset, load_plugin, validate_produces_consumes
 from ..scenario import Scenario, load_scenario
 from .artifacts import ArtifactRecorder, artifacts_root
-from .callback import finalize_evaluation
+from .callback import finalize_evaluation, summarize
 from .checkout import (
     CheckoutError, cleanup_stale, locate_manifest, prepare_checkout, remove_worktree,
 )
-from .evaluations import EvaluationStore
+from .evaluations import conclusion_of, EvaluationStore
 from .job import Job, result_to_dict
 from .runtime import RuntimePrepareError, prepare_runtime
 
@@ -141,6 +142,17 @@ class AutotestService:
         )
         with self._jobs_lock:
             self._jobs[job_id] = job
+        if eval_ctx is None:
+            # 本机通路（client run / tzcomm 面）也登记一条，否则 console 的评测列表
+            # **只显示 Hub 直连的评测**——本机跑的一律看不见。M-E10 把 console 定位为
+            # "单机执行面运维视图（本机排队/结果）"，只显示一半是误导：
+            # 2026-09-04 实测就撞上了「本机跑了 cicd_test_slam，console 里查无此事」。
+            # check_type="local" 供展示层区分；cid 用 local_ 前缀，与 Hub 的 chk_ 不冲突。
+            self._eval_store.create(
+                cid=f"local_{job_id}", job_id=job_id, repo=manifest.dir,
+                ref=None, sha=None, check_type="local",
+                scenario=",".join(eid for eid, _ in entries) or None,
+            )
         self._queue.put(job)  # M-E5：入队即返，单 worker 串行消费
         return {"job_id": job_id}
 
@@ -392,6 +404,14 @@ class AutotestService:
             }
             recorder.save_report(report_payload)
             # v1.5 §4.8：Hub 直连评测收尾——终态+摘要落档（M-E1）、基线滚动与主动回调（M-E3）
+            if job.eval_ctx is None:
+                # 本机通路：只回写终态供 console 展示，不发回调（没有 Hub 在等）
+                self._eval_store.update_terminal(
+                    f"local_{job.job_id}",
+                    status=conclusion_of(job.error, job.results),
+                    summary=summarize(report_payload),
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
             if job.eval_ctx is not None:
                 finalize_evaluation(job.eval_ctx, report_payload, self._eval_store,
                                     recorder.dir, recorder.log)

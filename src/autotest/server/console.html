@@ -187,7 +187,8 @@ async function refreshList() {
       tr.className = "row";
       tr.innerHTML = `<td class="mono">${esc(it.created_at)}</td>
         <td class="mono">${esc(short(it.job_id, 22))}</td>
-        <td class="mono">${esc(short(it.repo, 30))}${it.ref ? "@" + esc(short(it.ref, 18)) : ""}</td>
+        <td class="mono">${esc(short(it.repo, 30))}${it.ref ? "@" + esc(short(it.ref, 18)) : ""}${
+          it.check_type === "local" ? ' <span class="pill" title="本机 client run 提交，非 Hub 派发">本机</span>' : ""}</td>
         <td><span class="pill ${esc(it.status)}">${esc(it.status)}</span></td>
         <td>${esc(short(it.summary || (it.callback_error ? "回调失败: " + it.callback_error : ""), 60))}</td>`;
       tr.onclick = () => toggleDetail(it, tr);
