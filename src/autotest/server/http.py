@@ -208,7 +208,14 @@ def create_app(service: AutotestService) -> FastAPI:
             response.status_code = 404
             return {"ok": False, "error": f"未知 job_id: {job_id!r}"}
         if row["status"] == "running":  # 含排队中（契约无 queued 态，对 Hub 即 running）
-            return {"job_id": job_id, "status": "running"}
+            # D2：附进度。契约 §4.8 的 running 响应未定义额外字段，此处为向后兼容的增补
+            # （与 ARS §4.9.2 的 progress 同名同位，形态一致）。没有它，"卡死"与
+            # "只是排在后面"在外部无法区分。
+            body: dict = {"job_id": job_id, "status": "running"}
+            progress = service.progress_of(job_id)
+            if progress is not None:
+                body["progress"] = progress
+            return body
         return {
             "job_id": job_id,
             "status": row["status"],

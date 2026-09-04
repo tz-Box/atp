@@ -11,6 +11,7 @@ v1.5 §4.8 并发语义（M-E5）：单 ATP 串行执行（评测机资源独占
 """
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
@@ -23,6 +24,7 @@ import tzcomm
 from ..body import load_body, BodyError
 from ..commcheck import build_health
 from ..eval.closed_loop import ClosedLoopSession
+from ..eval.run_control import JobTimeout
 from ..eval.runner import Runner
 from ..launcher import launch_algorithm, stop_process
 from ..manifest import (ScenarioUnknownError, deep_merge, is_scenario_path,
@@ -42,6 +44,10 @@ from .runtime import RuntimePrepareError, prepare_runtime
 _JOB_TTL_SECONDS = 3600.0  # job 结果在池中保留时长（本版不清理，预留）
 
 # 仓库根目录（src/autotest/server/server.py → parents[3]），body/ 资产按此定位
+# D2：job 级超时上限（秒）。默认 3600 与 Hub 侧 60 分钟的超时窗口对齐——
+# ATP 先自己收口，才不会出现「Hub 判 timeout 归位、ATP 还在跑并占着串行队列」的状态分叉。
+_JOB_TIMEOUT_S = float(os.environ.get("AUTOTEST_JOB_TIMEOUT", "3600"))
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -252,6 +258,40 @@ class AutotestService:
         """排队深度（M-E4 /atp/health 探活字段；M-E5 串行队列）。"""
         return self._queue.qsize()
 
+    def progress_of(self, job_id: str) -> Optional[dict]:
+        """running 态进度（D2）。
+
+        单 worker 串行意味着排队是常态，而此前 running 态只回 `{job_id, status}`
+        ——**"卡死"与"只是排在后面"在外部完全无法区分**，运维没有下手的地方。
+        数据本就都有（results 逐 testcase 累积、scenario_entries 知道总场景数），
+        只是没暴露。
+        """
+        with self._jobs_lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            queued = list(self._queue.queue)  # 未取出的 job，顺序即执行顺序
+        if not job.started.is_set():
+            try:
+                position = queued.index(job) + 1
+            except ValueError:      # 刚被 worker 取出、started 尚未置位的瞬间
+                position = 0
+            return {"queued": True, "queue_position": position,
+                    "scenarios_total": len(job.scenario_entries) or 1}
+        with job.lock:
+            done_ids = {r["testcase_id"].split(":", 1)[0]
+                        for r in job.results if ":" in r["testcase_id"]}
+            return {
+                "queued": False,
+                "queue_position": 0,
+                "scenarios_total": len(job.scenario_entries) or 1,
+                "scenarios_done": len(done_ids),
+                "testcases_done": len(job.results),
+                "frames_sent": job.control.frames_sent,   # 帧级进度：卡死时它不再增长
+                "run_state": job.control.state,           # running | paused
+                "elapsed_s": round(time.monotonic() - (job.started_at or time.monotonic()), 1),
+            }
+
     # ---- tzcomm 面适配 ----
     def _on_control(self, request: dict) -> dict:
         command = request.get("command")
@@ -262,6 +302,25 @@ class AutotestService:
     def _on_job_status(self, request: dict) -> dict:
         return self.job_status(request.get("job_id", ""))
 
+    def _mark_timeout(self, job: Job, recorder: ArtifactRecorder, where: str) -> None:
+        """标记 job 超时：记失败条目 + job.error，供回调按 failure 归位。
+
+        摘要里显式写"超时"而非笼统 failure——Hub/PMS 展示层据此能区分
+        "算法没通过"与"评测没跑完"，这两者要采取的动作完全不同。
+        """
+        elapsed = time.monotonic() - (job.started_at or time.monotonic())
+        msg = (f"评测超时：已运行 {elapsed:.0f}s，超过上限 {_JOB_TIMEOUT_S:.0f}s"
+               f"（{where}）。上限经 AUTOTEST_JOB_TIMEOUT 配置。")
+        with job.lock:
+            job.timed_out = True
+            if job.error is None:
+                job.error = msg
+            job.results.append({
+                "testcase_id": "<timeout>", "metrics": None, "passed": False,
+                "n_records": 0, "error": msg,
+            })
+        recorder.log(msg)
+
     def _worker_loop(self) -> None:
         """M-E5 串行语义：唯一 worker 逐 job 消费 FIFO 队列（评测机资源独占）。"""
         while True:
@@ -269,6 +328,9 @@ class AutotestService:
             if job is None:  # 停止信号（close）
                 return
             job.started.set()
+            now = time.monotonic()
+            job.started_at = now
+            job.deadline_at = now + _JOB_TIMEOUT_S
             self._run_job(job)
 
     def _run_job(self, job: Job) -> None:
@@ -281,10 +343,16 @@ class AutotestService:
             entries = job.scenario_entries or [("default", job.scenario)]
             multi = len(entries) > 1
             for entry_id, scenario in entries:
+                # 场景边界超时闸：不再开新场景（帧级闸在 Loader，见 eval/loader.py）
+                if job.deadline_at is not None and time.monotonic() >= job.deadline_at:
+                    self._mark_timeout(job, recorder, f"场景[{entry_id}] 未开始")
+                    break
                 prefix = f"{entry_id}:" if multi else ""
                 session_id = f"{job.session_id}-{entry_id}" if multi else job.session_id
                 self._run_scenario(job, entry_id, scenario, recorder, prefix, session_id,
                                    runtime_env)
+        except JobTimeout:
+            self._mark_timeout(job, recorder, "帧级闸")
         except RuntimePrepareError as exc:
             # 环境准备失败 = job 级失败（场景未执行；docker 未实现/venv 创建失败等）
             msg = f"运行环境准备失败: {exc}"
@@ -379,6 +447,7 @@ class AutotestService:
             # 4) 会话握手 + 推流/交互 + 打分（progress_cb 逐 testcase 上报部分结果 + 留痕）
             #    闭环 World（closed_loop=True，如 SimWorld）走 ClosedLoopSession，否则走开环 Runner
             session_cls = ClosedLoopSession if getattr(world, "closed_loop", False) else Runner
+            job.control.set_deadline(job.deadline_at)  # D2：帧级超时闸（暂停期不计时）
             runner = session_cls(world, checker, body=body, session_id=session_id, control=job.control)
             try:
 
@@ -414,6 +483,10 @@ class AutotestService:
                 for warning in health["warnings"]:
                     recorder.log(f"[comm] WARNING: {warning}")
                 runner.close()
+        except JobTimeout:
+            # D2：超时是 **job 级**中止，不是场景级失败——不能记一条失败条目就继续跑下一个
+            # 场景，那样只会把超时状态一路拖下去、继续占着串行队列。向上抛给 _run_job。
+            raise
         except Exception as exc:  # noqa: BLE001 场景级失败记条目并继续后续场景
             msg = f"{type(exc).__name__}: {exc}"
             with job.lock:

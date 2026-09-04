@@ -9,10 +9,11 @@ import time
 import uuid
 from pathlib import Path
 
+import pytest
 import tzcomm
 
 from autotest.eval import ClosedLoopSession, Runner
-from autotest.eval.run_control import RunControl
+from autotest.eval.run_control import JobTimeout, RunControl
 from autotest.protocol import messages as msg
 from autotest.protocol import topics
 from autotest.protocol.schema import StampedPose, decode_observation, encode_action, encode_result
@@ -250,3 +251,28 @@ def test_service_debug_commands(daemon, tmp_path):
     finally:
         node.close()
         service.close()
+
+
+# ---- D2：job 级超时闸与暂停补偿 ----
+
+def test_deadline_gate_raises_after_timeout():
+    control = RunControl()
+    control.set_deadline(time.monotonic() + 0.2)
+    control.wait_gate()                 # 未超时 → 直通
+    time.sleep(0.3)
+    with pytest.raises(JobTimeout):
+        control.wait_gate()
+
+
+def test_paused_time_not_counted_toward_timeout():
+    """★暂停期不计入超时。
+
+    pause 的语义是"算法断点/现场观察的安全态，不会因超时被判死"（教程第 2 关 §2.9）。
+    若暂停照样走超时时钟，挂着断点看现场就会被框架杀掉，这条承诺即作废。
+    """
+    control = RunControl()
+    control.set_deadline(time.monotonic() + 0.3)
+    control.pause()
+    time.sleep(0.5)        # 暂停时长已超过原 deadline
+    control.resume()
+    control.wait_gate()    # 补偿生效则直通；不补偿会在此抛 JobTimeout

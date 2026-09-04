@@ -44,14 +44,18 @@ def _write_manifest(tmp_path: Path) -> str:
 
 
 def _submit(manifest: str, checker: str = "",
-            scenario_ids: "list[str] | None" = None) -> dict:
-    """提交评测并轮询到完成，返回最终状态（含 job_id/results/error）。"""
+            scenario_ids: "list[str] | None" = None, clock_rate: float = 0) -> dict:
+    """提交评测并轮询到完成，返回最终状态（含 job_id/results/error）。
+
+    clock_rate 缺省 0（全速），避免测试按实时帧间隔干等；需要真实耗时的用例
+    （如 D2 超时）显式传 1.0。
+    """
     node = tzcomm.Node("test-client")
     try:
         ctl = node.create_service_client(topics.control_service())
         if not ctl.wait_for_server(timeout=5):
             raise RuntimeError("control 服务不可用")
-        request = {"manifest": manifest, "clock_rate": 0}  # 全速，避免测试按实时帧间隔等待
+        request = {"manifest": manifest, "clock_rate": clock_rate}
         if checker:
             request["checker"] = checker  # 评测方覆盖场景 checker（交叉测试矩阵路径）
         if scenario_ids is not None:
@@ -325,3 +329,32 @@ def test_service_docker_runtime_rejected_f1(daemon, tmp_path):
     assert len(results) == 1
     assert results[0]["testcase_id"] == "<runtime>"
     assert results[0]["passed"] is False
+
+
+# ---- D2：job 级超时（端到端） ----
+
+def test_job_timeout_aborts_job(daemon, tmp_path, monkeypatch):
+    """★超时后 job 中止并记 <timeout> 条目。
+
+    后果不是"某个 job 慢"，是**整条串行队列被占死**：单 worker 被卡死/超长 job 永久占住，
+    后续评测全部饿死；而 Hub 侧 60 分钟就判 timeout 归位了，两边状态就此分叉。
+    触发不需要 bug——50000 帧 @dt=0.1、clock_rate=1.0 的回放就是 83 分钟。
+    """
+    import autotest.server.server as srv
+
+    monkeypatch.setattr(srv, "_JOB_TIMEOUT_S", 0.3)  # 压到亚秒级，走真实通路验
+    manifest_path = _write_manifest(tmp_path)
+    service = _start_service()
+    try:
+        # clock_rate=1.0 让推流按原始帧间隔走（单 testcase 约 1.9s），才会撞上 deadline；
+        # 其余用例用缺省的全速，不受影响
+        resp = _submit(manifest_path, clock_rate=1.0)
+    finally:
+        service.close()
+
+    results = resp.get("results", [])
+    row = next((r for r in results if r["testcase_id"] == "<timeout>"), None)
+    assert row is not None, f"未记超时条目: {results}"
+    assert row["passed"] is False
+    assert "评测超时" in row["error"]
+    assert "AUTOTEST_JOB_TIMEOUT" in row["error"]  # 报文里给出可调之处

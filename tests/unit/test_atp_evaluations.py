@@ -36,6 +36,10 @@ class _FakeService:
     def queue_depth(self) -> int:
         return 0
 
+    def progress_of(self, job_id: str):
+        """替身不跑真 job，故无进度（真 service 对未知 job_id 同样返回 None）。"""
+        return None
+
     def submit_evaluation(self, req: dict) -> dict:
         # M-F2 形态分派（对齐真 service）：路径值 → manifest 相对路径；id/列表/None → 清单选择
         raw = req.get("scenario")
