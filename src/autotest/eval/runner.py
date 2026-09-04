@@ -22,8 +22,57 @@ from .run_control import RunControl
 _SERVICE_TIMEOUT = 10.0
 
 
+def check_data_sensors(world, ready: "msg.Message") -> list[str]:
+    """校验**实际数据**里的传感器实例覆盖 SUT 声明所需（契约 §8 一致性规则）。
+
+    为什么单有 check_sensors 不够——2026-09-04 由 cicd_test_slam 现场暴露：
+    check_sensors 比对的是「SUT 要什么」vs「**body 声明**有什么」，而 body 是资产声明，
+    不是数据事实。于是出现了这种通过：
+        SUT 声明 required_sensors={lidar:[front]}   →  body pbox_v1 确有 front  →  握手通过
+        但合成数据实际给的实例叫 lidar/lidar        →  SUT 真去读 front 会 KeyError
+    **声明被拿去和错的东西比对了**，给出的是虚假的通过。仓内当时 3 个使用非空 body 的
+    场景，3 个都不一致——因为在此之前没有任何评测真正用过带传感器的 body。
+
+    返回告警列表（数据多给的实例：body 未声明 → 无外参可用，算法无从解释，但不阻断）。
+    缺失（SUT 要而数据没有）直接抛错：那是必然的运行期崩溃，早失败早归因。
+    """
+    required = ready.payload.get("required_sensors", {})
+    if not required or getattr(world, "realtime", False):
+        # 实时源（device/rostopic）首帧要等真实数据到达，不能为体检去空转一次 reset
+        return []
+    try:
+        testcases = list(world.testcases)
+        if not testcases:
+            return []
+        observation = world.reset(testcases[0])
+        from ..protocol.schema import decode_observation
+        actual = getattr(decode_observation(observation["data"]), "sensors", {}) or {}
+    except Exception:  # noqa: BLE001 探针失败不该顶替真正的评测错误
+        return []
+
+    for stype, names in required.items():
+        available = list((actual.get(stype) or {}).keys())
+        missing = [n for n in names if n not in available]
+        if missing:
+            raise RuntimeError(
+                f"SUT 需要传感器 {stype}/{missing}，但**数据实际未提供**"
+                f"（该类型实际实例：{available or '无'}）。"
+                f"注意与 body 声明的差别：body 是资产声明，这里比对的是数据事实。"
+            )
+    warnings: list[str] = []
+    declared = {st: set(i) for st, i in (getattr(world, "_body_instances", None) or {}).items()}
+    for stype, insts in actual.items():
+        extra = sorted(set(insts) - declared.get(stype, set(insts)))
+        if extra:
+            warnings.append(f"数据提供了 body 未声明的实例 {stype}/{extra}（无外参可用）")
+    return warnings
+
+
 def check_sensors(init_config: Optional[dict], ready: "msg.Message") -> None:
-    """校验场景提供的传感器是否覆盖 SUT 在 READY 里声明的 required_sensors。"""
+    """校验场景提供的传感器是否覆盖 SUT 在 READY 里声明的 required_sensors。
+
+    ⚠ 本函数比对的是 **body 声明**，不是数据事实——数据侧的校验见 check_data_sensors。
+    """
     provided = (init_config or {}).get("sensor_config", {})  # {类型: {实例名: topic}}
     required = ready.payload.get("required_sensors", {})  # {类型: [实例名...]}
     for stype, names in required.items():
@@ -87,7 +136,9 @@ class Runner:
         if body_profile:
             merged_config["sensor_config"] = body_profile["sensor_config"]
         ready = self._call(msg.init(self.session_id, merged_config, body_profile=body_profile))
-        check_sensors(merged_config, ready)
+        check_sensors(merged_config, ready)          # SUT 要什么 vs body 声明什么
+        for w in check_data_sensors(self._world, ready):   # vs 数据实际给什么
+            print(f"[sensors] WARNING: {w}")
         results: list[TestcaseResult] = []
         try:
             for testcase_id in testcases:

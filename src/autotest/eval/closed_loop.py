@@ -18,7 +18,7 @@ from ..protocol import topics
 from ..world.base import IWorld
 from .checker import IChecker
 from .run_control import RunControl
-from .runner import TestcaseResult, check_sensors
+from .runner import TestcaseResult, check_data_sensors, check_sensors
 
 _ACTION_TIMEOUT = 60.0
 _SERVICE_TIMEOUT = 10.0
@@ -68,7 +68,9 @@ class ClosedLoopSession:
         if body_profile:
             merged_config["sensor_config"] = body_profile["sensor_config"]
         ready = self._call(msg.init(self.session_id, merged_config, body_profile=body_profile))
-        check_sensors(merged_config, ready)
+        check_sensors(merged_config, ready)          # SUT 要什么 vs body 声明什么
+        for w in check_data_sensors(self._world, ready):   # vs 数据实际给什么
+            print(f"[sensors] WARNING: {w}")
         results: list[TestcaseResult] = []
         try:
             for testcase_id in testcases:

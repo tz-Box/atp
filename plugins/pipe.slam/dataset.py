@@ -1,7 +1,7 @@
 """pipe.slam 合成数据集：固定圆形轨迹 + 点云/IMU/里程计观测 + GT 轨迹。"""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar, Iterator
 
 import numpy as np
@@ -31,6 +31,11 @@ class SyntheticSlamDataset:
     dt: float = 0.1
     radius: float = 2.0
     seed: int = 0
+    # 激光实例名。**必须与所引用 body 的实例名对齐**——否则算法声明 required_sensors
+    # 时会拿到"body 里有、数据里没有"的虚假通过（2026-09-04 由 cicd_test_slam 暴露，
+    # 见 eval/runner.py check_data_sensors）。缺省 ["front"] 对齐 body/pbox_v1.yaml。
+    # 配多个即产多实例，可用于验证 FrameAssembler 的多实例时间戳对齐。
+    lidar_instances: list = field(default_factory=lambda: ["front"])
 
     produces: ClassVar[list[str]] = ["pipe.slam.SlamObs"]
 
@@ -58,7 +63,13 @@ class SyntheticSlamDataset:
             imu = Imu(angular_velocity=[0.0, 0.0, 0.3], linear_acceleration=[0.0, 0.0, 0.0])
             odom = Pose(x=x, y=y, z=z, qx=float(q[0]), qy=float(q[1]), qz=float(q[2]), qw=float(q[3]))
             slam_data = SlamData(
-                sensors={"lidar": {"lidar": lidar}, "imu": {"imu": imu}},
+                sensors={
+                    # 多实例时各实例给不同噪声实现，便于区分（否则对齐 bug 看不出来）
+                    "lidar": {name: (lidar if i == 0 else
+                                     rng.normal(0.0, 0.5, size=lidar.shape).astype(np.float32))
+                              for i, name in enumerate(self.lidar_instances)},
+                    "imu": {"imu": imu},
+                },
                 odom=odom,
             )
             yield make_observation("pipe.slam", ts, encode_observation("pipe.slam.SlamObs", slam_data))
