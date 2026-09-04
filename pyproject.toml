@@ -10,10 +10,18 @@ version = "0.1.0"
 description = "统一自动化测试服务框架（基于 tzcomm）"
 requires-python = ">=3.9"
 # 注意：tzcomm 为环境内已安装的本地组件（editable），不在此声明依赖。
-dependencies = ["numpy"]
+#
+# 核心依赖 = `import autotest.sdk` / protocol / manifest / scenario / body 所需。
+# 算法仓只为拿 SutBase 装本包，故 HTTP 服务那套（fastapi/uvicorn/pydantic）拆进
+# 可选 extra，不让算法仓白白背上。
+# rclpy 不声明：它随 ROS2 发行版安装、不走 pip，且 world/rostopic.py 里是**方法内惰性 import**。
+dependencies = ["numpy", "PyYAML", "msgpack"]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+# 跑 autotest.server（HTTP 面 :2335 / console / 文档门户）需要
+server = ["fastapi", "uvicorn", "pydantic"]
+# httpx 是 fastapi TestClient 的运行时依赖，不装则 server 相关测试无法收集
+dev = ["pytest", "httpx", "fastapi", "uvicorn", "pydantic"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
