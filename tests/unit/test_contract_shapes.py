@@ -3,77 +3,72 @@
 ## 这套测试为什么重要
 
 四平台靠一份契约并行开发，而契约是 Markdown——**没有任何机制会在报文被改坏时发出声音**。
-本轮已有现成例证：v1.7 还没批准，ARS 仓内文档就已与总契约说法不同；Hub 的 267 个测试
-自举闭环静默断开一周无人发现。共同点都不是有人做错了什么，而是没有告警机制。
+做法承自 ARS owner 的建议：解析契约原文取字段集与实现逐字段比对，契约一改这里就红。
 
-做法承自 ARS owner 的建议（其 `tests/test_result.py` 是同一路子）：
-**直接解析契约 Markdown 里的 json/jsonc 块取字段集来比对——契约一改，这里就红。**
+## ★为什么读入库副本，而不是测试时现读契约（2026-09-04 修正）
 
-方向语义（收发两侧要求不同，不能一刀切）：
-- ATP 是**发送方**的报文（回调、health、status 响应）：契约字段必须**全部发出**，
+初版直接读 `__temp__/cicd_hub` 软链下的契约，软链不可达就整文件 skip。
+但 `__temp__/` 在 .gitignore 里——**CI checkout 出来根本没有它，8 项断言会全部 skip：
+绿着，什么都没测**。而这套测试本来就是为了防「约定了但没人执行」，它自己却成了那个形态。
+（Hub owner 在其仓用 `git archive` 模拟 CI checkout 实测命中并给出修法，ATP 侧同形。）
+
+现在拆成两件事：
+- **契约检查**读入库副本 `tests/fixtures/contract_shapes.json`——副本缺失即 **assert 失败**
+  （副本缺失是仓的问题，应当红），任何环境都会真跑；
+- **「副本 vs 上游是否漂移」单列一项，只有它可以 skip**——它检查的是同步状态而非契约本身，
+  拿不到上游时跳过合理。**关键在这个区分：不能因为拿不到上游，就把契约检查一并跳掉。**
+
+副本由 `scripts/sync_contract_shapes.py` 生成；契约改动后跑一次即可（像 lockfile）。
+
+## 方向语义（收发两侧要求不同，不能一刀切）
+
+- ATP 作**发送方**（回调 / health / status 响应）：契约字段必须**全部发出**，
   可以多发（新增字段向后兼容），不可漏发。
-- ATP 是**接收方**的报文（submit 请求）：契约字段必须**全部认得**，
-  漏认会让 Hub 传的东西被静默丢弃。
-
-契约经 `__temp__/cicd_hub` 软链引用（唯一事实源在 Hub 仓，本仓不留副本）。
-软链不可达时跳过——但 CI 上应让它真正跑起来（见 .github/workflows/ci.yml 的说明）。
+- ATP 作**接收方**（submit 请求）：契约字段必须**全部认得**，
+  漏认会让 Hub 传的东西被静默丢弃——R12 那类「看起来在跑，其实在错」正是如此。
 """
 from __future__ import annotations
 
 import json
-import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from autotest import CONTRACT_VERSION
 
-_CONTRACT = (Path(__file__).resolve().parents[2]
-             / "__temp__" / "cicd_hub" / "docs" / "PatrolBox-通信与接口总契约.md")
-
-pytestmark = pytest.mark.skipif(
-    not _CONTRACT.is_file(), reason="总契约不可达（__temp__/cicd_hub 软链未建）")
-
-
-def _strip_jsonc(text: str) -> str:
-    """去掉 // 注释，但不碰字符串内部（契约里的值含 `<分支; 通路1=...>` 这类文本）。"""
-    out, in_str, esc, i = [], False, False, 0
-    while i < len(text):
-        c = text[i]
-        if in_str:
-            out.append(c)
-            if esc:
-                esc = False
-            elif c == "\\":
-                esc = True
-            elif c == '"':
-                in_str = False
-        elif c == '"':
-            in_str = True
-            out.append(c)
-        elif c == "/" and i + 1 < len(text) and text[i + 1] == "/":
-            while i < len(text) and text[i] != "\n":
-                i += 1
-            continue
-        else:
-            out.append(c)
-        i += 1
-    return "".join(out)
+_ROOT = Path(__file__).resolve().parents[2]
+_FIXTURE = _ROOT / "tests" / "fixtures" / "contract_shapes.json"
+_SYNC = _ROOT / "scripts" / "sync_contract_shapes.py"
+_UPSTREAM = _ROOT / "__temp__" / "cicd_hub" / "docs" / "PatrolBox-通信与接口总契约.md"
 
 
-def _block_after(heading_pattern: str) -> dict:
-    """取某个标题行之后的第一个 ```json(c) 块并解析。"""
-    md = _CONTRACT.read_text(encoding="utf-8")
-    m = re.search(heading_pattern + r".*?```jsonc?\n(.*?)```", md, re.S)
-    assert m, f"契约里找不到 {heading_pattern!r} 之后的 json 块——章节标题变了？"
-    return json.loads(_strip_jsonc(m.group(1)))
+def _shape(name: str) -> dict:
+    """取入库副本里的某个报文结构。副本缺失 → 失败（不是 skip）。"""
+    assert _FIXTURE.is_file(), (
+        f"契约副本缺失: {_FIXTURE.relative_to(_ROOT)}。"
+        f"跑 python3 scripts/sync_contract_shapes.py 生成。"
+        f"（此处刻意 assert 而非 skip——副本缺失是仓的问题，绿着什么都没测才是要防的）")
+    return json.loads(_FIXTURE.read_text(encoding="utf-8"))[name]
+
+
+# ── 唯一允许 skip 的一项：副本与上游是否漂移 ──────────────────────────────
+
+@pytest.mark.skipif(not _UPSTREAM.is_file(),
+                    reason="上游契约不可达（__temp__/cicd_hub 软链未建）——"
+                           "本项检查的是同步状态，跳过合理；契约检查本身不受影响")
+def test_契约副本未与上游漂移():
+    r = subprocess.run([sys.executable, str(_SYNC), "--check"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr or r.stdout
 
 
 # ── ATP 作为发送方：契约字段必须全部发出 ────────────────────────────────
 
 def test_health_响应覆盖契约字段():
     """§4.8 `GET /atp/health`。contract 字段是 v1.7-R12 的硬要求。"""
-    shape = _block_after(r"\*\*`GET /atp/health`\*\*")
+    shape = _shape("atp_health")
     from types import SimpleNamespace
 
     from fastapi.testclient import TestClient
@@ -90,7 +85,7 @@ def test_health_响应覆盖契约字段():
 
 def test_回调报文覆盖契约字段():
     """§4.3 `POST /api/ci/callback`。ATP 是发起方，漏发字段 Hub 就归位不了。"""
-    shape = _block_after(r"Authorization: Bearer <hub\.callback_token>")
+    shape = _shape("ci_callback")
     from autotest.server.callback import build_payload
 
     got = build_payload("chk_1", "sha1", "success", "2/2 passed")
@@ -104,7 +99,7 @@ def test_回调报文覆盖契约字段():
 
 def test_status_响应覆盖契约字段(tmp_path):
     """§4.8 `GET /atp/evaluations/{job_id}` 终态响应。Hub 轮询兜底靠它归位。"""
-    shape = _block_after(r"\*\*`GET /atp/evaluations/\{job_id\}`\*\*")
+    shape = _shape("atp_evaluation_status")
     from autotest.server.evaluations import EvaluationStore
 
     store = EvaluationStore(tmp_path / "atp.db")
@@ -125,7 +120,7 @@ def test_status_响应覆盖契约字段(tmp_path):
 def test_submit_请求认得契约全部字段():
     """§4.8 `POST /atp/evaluations`。漏认会让 Hub 传的东西被静默丢弃——
     R12 那类"看起来在跑，其实在错"的故障正是这么来的。"""
-    shape = _block_after(r"\*\*`POST /atp/evaluations`\*\*")
+    shape = _shape("atp_evaluations_submit")
     from autotest.server.http import EvaluationRequest
 
     known = set(EvaluationRequest.model_fields)

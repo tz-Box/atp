@@ -1,0 +1,43 @@
+{
+  "atp_evaluation_status": {
+    "finished_at": "<可空,终态时带>",
+    "job_id": "autotest-xxxx",
+    "report": {
+      "run_url": null,
+      "summary": "..."
+    },
+    "sha": "<实际 checkout sha>",
+    "status": "running | success | failure"
+  },
+  "atp_evaluations_submit": {
+    "check_type": "autotest",
+    "correlation_id": "chk_01J...",
+    "pms_task_id": "<可空,仅透传留痕>",
+    "ref": "<分支;通路1=事件分支;通路3=mannultest/<user>/<ts>>",
+    "repo": "owner/pbox-xxx",
+    "save_baseline": false,
+    "scenario": "<可空;仓库内 manifest 相对路径,缺省=仓库默认 scenario.yaml>",
+    "sha": "<可空;通路1=push 事件 sha;通路3 可空,以 ATP 实际 checkout 为准>"
+  },
+  "atp_health": {
+    "contract": "1.7",
+    "ok": true,
+    "queue": 0,
+    "tzcomm": "ok",
+    "version": "<ATP 版本>"
+  },
+  "ci_callback": {
+    "check_type": "autotest | aireview",
+    "conclusion": "success | failure",
+    "correlation_id": "chk_01J...",
+    "finished_at": "<完成时刻 ISO8601;v1.2 新增>",
+    "report": {
+      "metrics": {
+        "<v1.7 可选对象;ATP 不发则无此字段;aireview 结构见 §4.9.2>": "..."
+      },
+      "run_url": "<Hub 归位时自填,发起方省略;语义按 check_type 分化,见下>",
+      "summary": "<结构化摘要文本:passed/n_records/metrics 概览;有基线时附 vs_baseline 计数>"
+    },
+    "sha": "<实际 checkout 的 commit sha;v1.2 必带>"
+  }
+}
