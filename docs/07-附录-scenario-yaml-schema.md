@@ -51,10 +51,37 @@ scenarios:
     checker_config: {}        # 可选;深合并覆盖场景文件 checker_config(判定阈值即经此表达)
     dataset_config: {}        # 可选;深合并覆盖场景文件 dataset.config
     baseline: baselines/small_push.json   # 可选;仓内参考基线(相对仓根),见 §6
+    expect: pass              # 可选;pass(缺省)|fail —— 本场景的**期望结果**,见 §3.1
 ```
+
+### 3.1 `expect` —— 场景级期望结果（总契约 §10 A11）
+
+`expect: fail` 声明「本场景**设计成必须失败**」，用于体检**判据本身还在不在工作**——
+一套只含必过工况的 benchmark 无法证明判据没坏（教程[第 3 关](03-第3关-定义benchmark.md) §3.3 第 ③ 层）。
+
+结论按「**实际 vs 期望**」判定，四态：
+
+| expect | 实际 | 结论 | 含义 |
+|---|---|---|---|
+| `pass` | 通过 | ✅ 符合预期 | 正常 |
+| `fail` | 失败 | ✅ 符合预期 | 体检用例在工作 |
+| `pass` | 失败 | ❌ 不符合预期 | 真的坏了 |
+| **`fail`** | **通过** | ❌ 不符合预期 | **判据坏了**——它已不能拒绝坏算法。**这不是「失败」，是更值得警觉的信号** |
+
+**只要所有场景都符合预期，整次评测即 `success`。** 没有这个字段时，一个设计成必红的
+场景会把整次评测拖红，而那条 `failure` 会同时流进四个消费者（GitHub check-run、
+PMS「失败必通知」推飞书、Hub 概览失败数、交付物冻结判据），**每一个都被喂了错误事实**。
+
+**原始事实不被改写**：`results` 里每条 testcase 的 `passed` 保持真实，
+`report.metrics.testcases` 的计数也照实报——否则没人知道该场景到底跑没跑过。
+改的只是**结论**的算法。
+
+> **期望值必须写在被测仓内**（本 Schema），不能挂在 Hub 规则里：
+> 那等于把测试语义搬出被测仓（违反 §1 的定位），场景名在仓里、期望值在 Hub，两处必然漂。
 
 约束：
 - `id` 重复 / 非法字符 / 缺 `scenario` 文件引用 → manifest_invalid（§7）。
+- `expect` 取值非 `pass|fail` → manifest_invalid。
 - 清单为空列表 `[]` ≡ 省略（走旧字段 `scenario`）。
 - 同一 `scenario` 文件可被多个清单项引用（不同 hyperparams/阈值 = 不同场景）。
 

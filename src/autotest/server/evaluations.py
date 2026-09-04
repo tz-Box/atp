@@ -33,12 +33,54 @@ CREATE TABLE IF NOT EXISTS evaluations (
 _TERMINAL = ("success", "failure")
 
 
-def conclusion_of(error: Optional[str], results: list[dict]) -> str:
-    """评测终态判定（状态查询 M-E4 与回调 conclusion M-E3 共用）：
-    error 或任一 testcase passed=False → failure；passed=None（数据流验证）不判失败。
+def scenario_outcomes(results: list[dict],
+                      expects: Optional[dict[str, str]] = None) -> list[dict]:
+    """按场景聚合 testcase 结果，并与期望比对（A11）。
+
+    testcase_id 在多场景时带 `场景id:` 前缀；单场景无前缀，归入 expects 里的唯一场景
+    （或 "default"）。返回每场景 {name, expected, actual, met, testcases{passed,failed}}。
+
+    **四态由 expected/actual 两字段推导，不要只看 met**——met=False 掩盖了两种
+    性质完全不同的情况：`expected=pass, actual=fail` 是意外失败（真坏了）；
+    而 `expected=fail, actual=pass` 是**预期外通过**，它根本不是失败，
+    而是**判据坏了**的信号（体检用例失去鉴别力）。
+    """
+    expects = expects or {}
+    default_name = next(iter(expects), "default") if len(expects) == 1 else "default"
+    buckets: dict[str, dict] = {}
+    for r in results:
+        tid = str(r.get("testcase_id", ""))
+        name = tid.split(":", 1)[0] if ":" in tid else default_name
+        b = buckets.setdefault(name, {"passed": 0, "failed": 0})
+        if r.get("passed") is True:
+            b["passed"] += 1
+        elif r.get("passed") is False:
+            b["failed"] += 1
+    out = []
+    for name, b in buckets.items():
+        actual = "fail" if b["failed"] > 0 else "pass"
+        expected = expects.get(name, "pass")
+        out.append({"name": name, "expected": expected, "actual": actual,
+                    "met": actual == expected, "testcases": b})
+    return out
+
+
+def conclusion_of(error: Optional[str], results: list[dict],
+                  expects: Optional[dict[str, str]] = None) -> str:
+    """评测终态判定（状态查询 M-E4 与回调 conclusion M-E3 共用）。
+
+    - `error` → failure（ATP 自身失败，与业务结论无关）。
+    - **A11**：给出 expects 时按「实际 vs 期望」判定——所有场景符合预期即 success。
+      设计成必须失败的场景（expect=fail）确实失败时**不再拖红整次评测**：
+      此前 `any(passed is False) → failure` 一行，会让四个消费者同时被喂错误事实
+      （check-run ❌ / PMS「失败必通知」推飞书 / Hub 概览失败数 / 通路4 交付物冻结）。
+    - 未给 expects（本机通路、存量调用）→ 沿用原语义，行为不变。
+    - passed=None（数据流验证，不打分）两种路径下都不判失败。
     """
     if error:
         return "failure"
+    if expects:
+        return "success" if all(s["met"] for s in scenario_outcomes(results, expects)) else "failure"
     if any(r.get("passed") is False for r in results):
         return "failure"
     return "success"

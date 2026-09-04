@@ -91,6 +91,7 @@ class AutotestService:
         try:
             manifest = load_algorithm_manifest(request["manifest"])
             entries: list[tuple[str, Scenario]] = []
+            expects: dict[str, str] = {}   # A11：场景 id → pass|fail（缺省 pass）
             explicit_path = request.get("scenario")  # 场景文件路径（CLI --scenario 覆盖，旧语义）
             if explicit_path is None:
                 # M-F2：清单路径——scenario_ids（None=全跑；存量仓清单=唯一 default 项 ≡ 旧行为）
@@ -105,6 +106,7 @@ class AutotestService:
                     if request.get("checker_config"):
                         sc.checker_config = request["checker_config"]
                     entries.append((entry.id, sc))
+                    expects[entry.id] = entry.expect        # A11：场景级期望结果
                 if not entries:
                     return {"error": "manifest 无可用场景（scenarios 与 scenario 均空）",
                             "code": "manifest_invalid"}
@@ -139,6 +141,7 @@ class AutotestService:
             clock_rate=clock_rate,
             eval_ctx=eval_ctx,
             scenario_entries=entries,
+            scenario_expects=expects,
         )
         with self._jobs_lock:
             self._jobs[job_id] = job
@@ -393,7 +396,8 @@ class AutotestService:
                 },
                 # M-F2：全场景清单（id/body/dataset_type），多场景排障与 Hub 展示用
                 "scenarios": [
-                    {"id": eid, "body": sc.body, "dataset_type": sc.dataset_type}
+                    {"id": eid, "body": sc.body, "dataset_type": sc.dataset_type,
+                     "expect": job.scenario_expects.get(eid, "pass")}   # A11
                     for eid, sc in (job.scenario_entries or [("default", job.scenario)])
                 ],
                 "clock_rate": job.clock_rate,
@@ -408,7 +412,7 @@ class AutotestService:
                 # 本机通路：只回写终态供 console 展示，不发回调（没有 Hub 在等）
                 self._eval_store.update_terminal(
                     f"local_{job.job_id}",
-                    status=conclusion_of(job.error, job.results),
+                    status=conclusion_of(job.error, job.results, job.scenario_expects),
                     summary=summarize(report_payload),
                     finished_at=datetime.now(timezone.utc).isoformat(),
                 )

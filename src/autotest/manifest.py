@@ -15,6 +15,7 @@ import yaml
 
 _SCENARIO_ID = re.compile(r"^[a-z0-9_]+$")
 _RUNTIME_TYPES = ("host", "venv", "docker")
+_EXPECT_VALUES = ("pass", "fail")
 
 
 class ScenarioUnknownError(ValueError):
@@ -36,6 +37,11 @@ class ScenarioEntry:
     checker_config: dict = field(default_factory=dict)
     dataset_config: dict = field(default_factory=dict)
     baseline: str = ""            # 仓内参考基线（相对仓根，可选）
+    # A11：本场景的**期望结果**。pass（缺省）= 应当通过；fail = **设计成必须失败**，
+    # 用于体检「判据本身还在不在工作」——一套只含必过工况的 benchmark 无法证明判据没坏。
+    # 结论按「实际 vs 期望」判定：符合预期即 success。**期望值必须落在被测仓内**
+    # （R2「测试定义权威在被测仓内」），不能挂在 Hub 规则里，否则场景名与期望值两处必然漂。
+    expect: str = "pass"
 
 
 @dataclass
@@ -67,6 +73,10 @@ def _parse_scenarios(data: list, manifest_name: str) -> list[ScenarioEntry]:
         seen.add(sid)
         if not item.get("scenario"):
             raise ValueError(f"scenarios[{i}].scenario 缺失（场景文件引用）: {manifest_name}")
+        expect = item.get("expect", "pass")
+        if expect not in _EXPECT_VALUES:
+            raise ValueError(
+                f"scenarios[{i}].expect 非法（pass|fail，缺省 pass）: {expect!r}（{manifest_name}）")
         entries.append(ScenarioEntry(
             id=sid,
             scenario=item["scenario"],
@@ -75,6 +85,7 @@ def _parse_scenarios(data: list, manifest_name: str) -> list[ScenarioEntry]:
             checker_config=item.get("checker_config") or {},
             dataset_config=item.get("dataset_config") or {},
             baseline=item.get("baseline", ""),
+            expect=expect,
         ))
     return entries
 

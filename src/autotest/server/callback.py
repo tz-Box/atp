@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .artifacts import ArtifactRecorder, artifacts_root
-from .evaluations import EvaluationStore, conclusion_of
+from .evaluations import EvaluationStore, conclusion_of, scenario_outcomes
 from .report import baseline_path_for, compare, load_baseline, save_baseline
 
 _CALLBACK_TIMEOUT = 15.0
@@ -38,7 +38,16 @@ def summarize(report: dict, changes: Optional[dict] = None) -> str:
         return f"评测失败: {report['error']}"
     results = report.get("results", [])
     n_passed = sum(1 for r in results if r.get("passed"))
-    head = f"{n_passed}/{len(results)} passed"
+    expects = _expects_of(report)
+    if expects:
+        # A11：抬头改报「场景符合度」。仍保留 testcase 计数——它是原始事实，
+        # 不因预期而改写（否则没人知道 expect=fail 的场景到底跑没跑过）。
+        outcomes = scenario_outcomes(results, expects)
+        met = sum(1 for o in outcomes if o["met"])
+        head = (f"{met}/{len(outcomes)} 场景符合预期"
+                f"（testcase {n_passed}/{len(results)} passed）")
+    else:
+        head = f"{n_passed}/{len(results)} passed"
     parts = []
     for r in results:
         if r.get("metrics"):
@@ -52,6 +61,40 @@ def summarize(report: dict, changes: Optional[dict] = None) -> str:
     if changes:  # vs_baseline 变化计数（regressed 为回归，需关注）
         parts.append("vs_baseline: " + ", ".join(f"{k}={v}" for k, v in sorted(changes.items())))
     return "; ".join([head, *parts])
+
+
+def _expects_of(report: dict) -> dict:
+    """从 report 的 scenarios 段取场景期望（A11）。report 自带该信息，回调无需另传。"""
+    return {sc["id"]: sc.get("expect", "pass")
+            for sc in (report.get("scenarios") or []) if sc.get("id")}
+
+
+def build_metrics(report: dict, changes: Optional[dict] = None) -> dict:
+    """结构化指标（总契约 §4.3 report.metrics，A11 定形）。
+
+    存在的理由：Hub console 此前**正则解析 summary 文本**取逐场景结论，
+    而 summary 只是给人看的散文——ATP 改一次措辞就会静默打断消费方
+    （2026-09 改 vs_baseline 分类即是一例）。结构化后该耦合消失。
+
+    ★消费方须用 expected/actual 推导四态，不要只看 met：
+      pass/pass=通过　fail/fail=预期内失败(灰)　pass/fail=意外失败(红)
+      fail/pass=**预期外通过**(红) —— 它不是失败，是**判据坏了**的信号。
+    """
+    results = report.get("results", [])
+    outcomes = scenario_outcomes(results, _expects_of(report))
+    metrics: dict = {
+        "scenarios": outcomes,
+        "scenario_counts": {"met": sum(1 for o in outcomes if o["met"]),
+                            "unmet": sum(1 for o in outcomes if not o["met"])},
+        "testcases": {
+            "passed": sum(1 for r in results if r.get("passed") is True),
+            "failed": sum(1 for r in results if r.get("passed") is False),
+            "total": len(results),
+        },
+    }
+    if changes:
+        metrics["vs_baseline"] = changes
+    return metrics
 
 
 def regression_changes(report: dict, repo: Optional[str] = None) -> Optional[dict]:
@@ -72,7 +115,8 @@ def regression_changes(report: dict, repo: Optional[str] = None) -> Optional[dic
 
 # ---- 报文与发送 ----
 
-def build_payload(cid: str, sha: Optional[str], conclusion: str, summary: str) -> dict:
+def build_payload(cid: str, sha: Optional[str], conclusion: str, summary: str,
+                  metrics: Optional[dict] = None) -> dict:
     """组回调载荷（§4.3）：cid + 实际 sha + check_type + conclusion + report + finished_at。
     run_url 语义 v1.5 归 Hub（console 详情页），ATP 省略。"""
     return {
@@ -80,7 +124,7 @@ def build_payload(cid: str, sha: Optional[str], conclusion: str, summary: str) -
         "sha": sha or "",  # v1.2 起必带；M-E2 前非 git 仓过渡为空串
         "check_type": "autotest",
         "conclusion": conclusion,
-        "report": {"summary": summary},
+        "report": {"summary": summary, **({"metrics": metrics} if metrics else {})},
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -119,7 +163,8 @@ def finalize_evaluation(eval_ctx: dict, report: dict, store: EvaluationStore,
     - report:   server report.json 载荷（error/results/comm_health）
     """
     cid = eval_ctx["cid"]
-    conclusion = conclusion_of(report.get("error"), report.get("results", []))
+    conclusion = conclusion_of(report.get("error"), report.get("results", []),
+                               _expects_of(report))          # A11：按实际 vs 期望
     repo = eval_ctx.get("repo")
     changes = regression_changes(report, repo)  # 先对比（基线按 repo 隔离，D1）
     summary = summarize(report, changes)
@@ -135,7 +180,8 @@ def finalize_evaluation(eval_ctx: dict, report: dict, store: EvaluationStore,
     if not url or not token:
         log(f"[callback] 未配置 HUB_CALLBACK_URL/HUB_CALLBACK_TOKEN，跳过发送 cid={cid}")
         return
-    payload = build_payload(cid, eval_ctx.get("sha"), conclusion, summary)
+    payload = build_payload(cid, eval_ctx.get("sha"), conclusion, summary,
+                            build_metrics(report, changes))
     # 回调线程生命周期晚于 recorder.close()：日志走独立句柄 append（ArtifactRecorder.append_log）
     def _thread_log(message: str) -> None:
         ArtifactRecorder.append_log(report_dir, message)

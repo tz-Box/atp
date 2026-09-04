@@ -298,3 +298,64 @@ def test_finalize_callback_failure_marks_store(store, tmp_path, monkeypatch, hub
         time.sleep(0.05)
     assert "回调最终失败" in store.get_by_cid("c1")["callback_error"]
     assert store.get_by_cid("c1")["status"] == "success"  # 结果不丢，轮询兜底可拿回
+
+
+# ---- A11：场景级期望结果（总契约 §10 A11）----
+
+def _report_with(expects: dict, results: list) -> dict:
+    return {"job_id": "j1", "error": None, "comm_health": {"warnings": []},
+            "results": results,
+            "scenarios": [{"id": k, "expect": v} for k, v in expects.items()]}
+
+
+def test_a11_expected_failure_does_not_turn_run_red():
+    """★expect=fail 的场景确实失败 → 整次评测仍 success。
+
+    修复前 conclusion_of 的一行「任一 testcase passed=False 即 failure」，会让四个消费者
+    同时被喂错误事实：check-run ❌ / PMS「失败必通知」推飞书 / Hub 概览失败数 / 通路4
+    交付物冻结永远答「没测过」。而 advisory 帮不上忙——autotest 恒 false，本就该参与聚合。
+    """
+    rep = _report_with({"smoke": "pass", "degraded": "fail"},
+                       [{"testcase_id": "smoke:tc0", "passed": True},
+                        {"testcase_id": "degraded:tc0", "passed": False},
+                        {"testcase_id": "degraded:tc1", "passed": False}])
+    assert cb._expects_of(rep) == {"smoke": "pass", "degraded": "fail"}
+    from autotest.server.evaluations import conclusion_of
+    assert conclusion_of(None, rep["results"], cb._expects_of(rep)) == "success"
+
+
+def test_a11_unexpected_pass_is_failure():
+    """★expect=fail 的场景**通过**了 → failure。
+
+    这是 A11 想表达、而此前体系里完全无法表达的信号：degraded 变绿说明判据
+    已经不能拒绝坏算法了。它不是「意外失败」——它根本不是失败，是判据坏了。
+    """
+    from autotest.server.evaluations import conclusion_of, scenario_outcomes
+    rep = _report_with({"degraded": "fail"},
+                       [{"testcase_id": "degraded:tc0", "passed": True}])
+    assert conclusion_of(None, rep["results"], cb._expects_of(rep)) == "failure"
+    o = scenario_outcomes(rep["results"], cb._expects_of(rep))[0]
+    # 四态须由 expected/actual 推导；只看 met 会把它和「意外失败」混为一谈
+    assert (o["expected"], o["actual"], o["met"]) == ("fail", "pass", False)
+
+
+def test_a11_metrics_shape_and_raw_facts_preserved():
+    """metrics 形状符合契约 A11；testcase 计数保持原始事实，不因预期被改写。"""
+    rep = _report_with({"smoke": "pass", "degraded": "fail"},
+                       [{"testcase_id": "smoke:tc0", "passed": True},
+                        {"testcase_id": "degraded:tc0", "passed": False},
+                        {"testcase_id": "degraded:tc1", "passed": False}])
+    m = cb.build_metrics(rep, {"same": 3})
+    assert set(m) == {"scenarios", "scenario_counts", "testcases", "vs_baseline"}
+    assert set(m["scenarios"][0]) == {"name", "expected", "actual", "met", "testcases"}
+    assert m["scenario_counts"] == {"met": 2, "unmet": 0}
+    # ★原始事实不改写：degraded 的两条确实失败了，否则没人知道它跑没跑过
+    assert m["testcases"] == {"passed": 1, "failed": 2, "total": 3}
+
+
+def test_a11_absent_expects_keeps_old_semantics():
+    """未声明 expect（存量仓、本机通路）→ 沿用原语义，行为不变。"""
+    from autotest.server.evaluations import conclusion_of
+    results = [{"testcase_id": "tc0", "passed": False}]
+    assert conclusion_of(None, results) == "failure"
+    assert conclusion_of(None, results, {}) == "failure"

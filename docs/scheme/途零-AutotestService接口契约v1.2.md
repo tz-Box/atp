@@ -285,36 +285,35 @@ hyperparams: {...}            # 算法超参,经 INIT 下发
 
 ---
 
-## 11. CI/CD 对接(v1.2 整节重写:总契约 v1.5 §4.3/§4.8)
+## 11. CI/CD 对接（**不在此复制，见总契约**）
 
-- **执行载体(v1.5 定案)**:autotest 检查的触发由"Hub→GitHub `workflow_dispatch`→self-hosted runner→本机 client"
-  切换为 **Hub 直连 ATP server HTTP 面**;self-hosted runner 从评测通路移除,GitHub 在 autotest 通路上只保留
-  **事件源**(webhook)与**展示板**(Hub check-runs 回写)两角色。
-  `examples/ci/autotest.yml` + `examples/ci/report.py` 降级为**算法仓 GHA 自测备选路径**(主通路不再分发)。
-- **ATP HTTP 面(总契约 §4.8;本契约承接为 ATP 侧权威实现约束,默认 :2335,systemd 常驻)**:
-  - **`POST /atp/evaluations`** — Bearer `atp.service_token` 认证(未知/错误 → 401);收
-    `{correlation_id, repo, ref, sha?, check_type, scenario?, save_baseline, pms_task_id?}`;
-    `202 {ok, job_id, sha}`;**同 cid 幂等** → `200 {ok, duplicate:true, job_id:<原job>}`,不重复执行;
-    校验失败(token/repo 或 ref 不可达/manifest 缺失)→ `4xx {ok:false, error}`(Hub 据此直接判 failure 免等超时)。
-  - **代码准备(定死)**:ATP 在本机 workspace 按 `repo+ref` checkout(每评测机预置 GitHub 只读凭证,如 deploy key;
-    凭证管理为部署细节);评测内容定义(manifest/场景/判分)全部来自该 checkout 的仓库内容——**Hub 不传递评测逻辑,只传递坐标**。
-  - **`GET /atp/evaluations/{job_id}`** — `{job_id, status: running|success|failure, sha, report:{summary, run_url}, finished_at?}`;
-    Hub 轮询兜底用:终态响应若回调未达则视同回调归位。
-  - **`GET /atp/health`** — `{ok, version, tzcomm, queue}`;Hub 池化探活用(不可达 → Hub 路由跳过 + ci_alert)。
-  - **并发语义**:单 ATP **串行执行**(评测机资源独占),Hub 侧排队;多 ATP 池化 = Hub 把不同任务分发到不同 ATP,ATP 间互不感知。
-- **主动回调(本版修订,发起方由 workflow 末步脚本改为 ATP server)**:评测完成(含失败)ATP 自动 POST
-  Hub `/api/ci/callback`(Bearer `hub.callback_token`),报文沿用既有定义:
-  `{correlation_id, sha(实际 checkout,v1.2 必带), check_type:"autotest", conclusion, report:{summary, run_url?}, finished_at}`。
-  - `summary` 含基线回归计数 `vs_baseline`(如 `improved=1, regressed=2`;无基线时不带)。
-  - `run_url` 语义(v1.5):Hub console check 详情页;**该 URL 只有 Hub 知道,ATP 省略或置空**,由 Hub 归位时填充。
-  - 回调地址/token 为 ATP 侧**静态配置**(`hub.callback_url` / `hub.callback_token`,systemd Environment),不经 submit 传递;
-    所有 ATP 恒回调同一 Hub。回调失败重试并记 session.log(最终失败不丢结果——Hub 轮询兜底可拿回)。
-- **手动预提交测试(通路3)**:分支约定 `mannultest/<operator>/<ts>` 前缀族(职责=让 ATP 有代码可 checkout);
-  手动测试语义=**仅预验证、不作交付附件**。
-- **tzcomm 同机约束不变**(§3.3):Hub 永不跨机调 autotest client/tzcomm/Redis;一切评测触发经"Hub→ATP HTTP 面"。
-- autotest 内部(tzcomm/World/协议/checker/插件)**不因 Hub/PMS 改动**;§10 Client 维持为本机入口,GHA workflow 维持自测备选。
+> **本节刻意不再复制条款。** ATP 的对外接口面（`POST /atp/evaluations`、
+> `GET /atp/evaluations/{job_id}`、`GET /atp/health`、`GET /atp/capabilities`、
+> 回调 `POST /api/ci/callback` 的报文与语义）**唯一事实源是**
+> 《PatrolBox 通信与接口总契约》**§4.3 / §4.8**（Hub 仓 `docs/`，本仓经 `__temp__/cicd_hub` 软链引用）。
+>
+> **为什么删掉原有的逐字段复制**：v1.2 曾把总契约 §4.8 的字段表整段抄进本节，
+> 于是同一份事实有了两个副本。副本的代价当天就有实例——2026-09-05 发现
+> 总契约第 445 行把「PMS 无 health 端点」当既定事实写进条款，而 PMS 的
+> `/healthz` 一直都在且早就回报 `contract` 字段；照契约做对账的人因此得出错误结论。
+> **副本会独立地错，而且错了没有任何机制会发现。**
+>
+> 保留在本文档的，只有**总契约不覆盖的 ATP 内部事实**（§1–§9：tzcomm 传输、
+> 协议九条消息、World 抽象、插件规范、body 资产），那些才是本契约存在的理由。
 
----
+**ATP 侧对外接口速查**（只给指针，字段以总契约为准）：
+
+| 面 | 端点 | 权威 |
+|---|---|---|
+| Hub → ATP | `POST /atp/evaluations`、`GET /atp/evaluations/{job_id}`、`GET /atp/health` | 总契约 §4.8 |
+| Hub → ATP（能力自报） | `GET /atp/capabilities` | ATP 侧扩展（M-E9a），总契约无此条 |
+| ATP → Hub | `POST /api/ci/callback`（cid + 实际 sha + conclusion + report） | 总契约 §4.3 |
+| 场景级期望结果 | 场景清单项 `expect: pass \| fail`，`report.metrics` 形状 | 总契约 §10 **A11** |
+| ATP ↔ PMS / ARS | **无。互不感知** | 总契约 §1 |
+
+**本机入口与 GHA 备选**（总契约不管，属 ATP 内部）：`§10 Client` 的
+`client run / matrix / report / pause / step / resume` 维持为本机通路；
+`examples/ci/autotest.yml` + `report.py` 为算法仓 GHA 自测备选路径，非主通路。
 
 ## 12. 联合测试 suite(扩展点,机制预留)
 
