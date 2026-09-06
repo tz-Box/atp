@@ -1,0 +1,1005 @@
+{
+ "config": "/home/turingzero/ws/pbox-simulator/configs/device_sim_quad.yaml",
+ "INFO": {
+  "capability": {
+   "kind": "capability",
+   "capability": {
+    "model_key": "sim_quad",
+    "locomotion_type": "LEGGED_QUAD",
+    "terrain_modes": [
+     {
+      "mode": "FLAT",
+      "cmd_dof": [
+       "vx",
+       "vy",
+       "wz"
+      ],
+      "acc_limit": {
+       "vx": 1.0,
+       "vy": 0.5,
+       "wz": 1.5
+      },
+      "jerk_limit": {},
+      "notes": "平地：全向可用。仿真里由 velocity-control 直接施加 twist",
+      "vx_range": [
+       -1.0,
+       1.0
+      ],
+      "vy_range": [
+       -1.0,
+       1.0
+      ],
+      "wz_range": [
+       -1.0,
+       1.0
+      ]
+     },
+     {
+      "mode": "STAIR",
+      "cmd_dof": [
+       "vx",
+       "wz"
+      ],
+      "acc_limit": {
+       "vx": 0.5,
+       "wz": 0.8
+      },
+      "jerk_limit": {},
+      "notes": "楼梯档：**故意不给横移**，用来测消费者是否逐档读 cmd_dof",
+      "vx_range": [
+       -0.5,
+       0.8
+      ],
+      "wz_range": [
+       -0.5,
+       0.5
+      ]
+     }
+    ],
+    "provides": {
+     "imu": "PROVIDED",
+     "attitude": "PROVIDED",
+     "contacts": "PROVIDED",
+     "foot_contact": "PROVIDED",
+     "stability": "PROVIDED",
+     "body_height": "NOT_PROVIDED",
+     "wheels": "NOT_PROVIDED",
+     "joints": "NOT_PROVIDED",
+     "slip_flag": "NOT_PROVIDED",
+     "battery": "NOT_PROVIDED",
+     "estop_readback": "NOT_PROVIDED",
+     "temperature": "NOT_PROVIDED",
+     "over_current": "NOT_PROVIDED"
+    },
+    "vendor": "TuringZero(sim)",
+    "notes": "Gazebo Harmonic 里的 S10 轮足四足，由 scripts/build_quad_model.py 从 models/s10_mjcf/urdf/S10.urdf + configs/descriptions/sim_quad.description.yaml 生成。**本体由 velocity-control 直驱**（twist 直接施加到本体）， 腿由位置控制器定在站姿、轮子被动滚——不是真实步态。 几何真实（取自 vendor URDF），动力学不真实；验的是接口契约与消费者鲁棒性， 不是步态保真度。真实步态属阶段二 MuJoCo，见 README 不做清单。 前后两路雷达是 **RoboSense Airy（Airy-h/v）**：900×96 = 86400 点/帧 @10Hz、 水平 360°×垂直 **0~90°**、量程 0.1-60m、σ=1.5cm 高斯噪声。栅格取自 configs/sensors/airy.lidar.yaml，加载期与仿真实际栅格对账。 Airy 是 600rpm 机械旋转 + 96 个固定垂直角的**重复栅格**扫描，与 gpu_lidar 的固定栅格同构——原先用 MID-360 时那条\"非重复花瓣扫描对不齐、SLAM 建图偏 乐观\"的告警，换型后**不再成立**。 ⚠ 垂直 FOV **全部在水平面以上**（半球朝上，Airy 是补盲雷达），当前安装朝向 不带俯仰，所以这两路**看不到地面与低于安装高度的障碍**——这是型号的真实特性。 仍然建不了模的：每秒 9ms 扫描缺口、双回波、标定反射强度、测距零偏与漂移 （gz 的 lidar 噪声只有 mean/stddev）、逐点发射延时（故无运动畸变可去）。 逐条见 sensors/airy.lidar.yaml 的 not_modeled 段与 ISSUES §D10。\n",
+    "min_turn_radius": 0.0,
+    "stair_capable": false,
+    "mount_points": [],
+    "power_outputs": [],
+    "footprint": [
+     [
+      0.31,
+      0.2
+     ],
+     [
+      0.31,
+      -0.2
+     ],
+     [
+      -0.31,
+      -0.2
+     ],
+     [
+      -0.31,
+      0.2
+     ]
+    ],
+    "base_link_def": "base_link",
+    "supports_joint_passthrough": false,
+    "has_fall_recovery": false,
+    "estop": {
+     "e0_hardware_readable": false,
+     "e1_soft_commandable": true,
+     "e1_alternate_path": "",
+     "e2_protective_stop": true,
+     "measured": false
+    },
+    "command_rate": {
+     "min_hz": 10.0,
+     "max_hz": 50.0
+    },
+    "single_client_required": false
+   },
+   "current_terrain_mode": "FLAT"
+  },
+  "source_list": {
+   "kind": "source_list",
+   "sources": [
+    {
+     "id": "body_odom",
+     "role": "ODOMETRY",
+     "clock_domain": "box",
+     "sync_tier_required": "T2",
+     "frame_id": "base_link",
+     "custom_role": "",
+     "schema_ref": "",
+     "openness": "BUILTIN_ROLE",
+     "hosted_by": "body_main",
+     "abstraction_level": "SAMPLED_DEVICE",
+     "extrinsic_source": "MECHANICAL_DESIGN",
+     "intrinsic_ref": "",
+     "rate_hz": 50.0,
+     "sync_class_declared": "S1_HOST_OFFSET",
+     "trigger_capability": "FREE_RUN",
+     "transport": {
+      "type": "sim",
+      "iface": "",
+      "peer": "",
+      "endpoint": "",
+      "channel": "",
+      "device": "",
+      "timestamp_capability": "SW_KERNEL"
+     },
+     "delivery": "INPROC",
+     "protocol": "",
+     "protocol_args": {},
+     "odom": {
+      "origin": "GROUND_TRUTH",
+      "cov_origin": "VENDOR_DECLARED",
+      "provides_pose": true,
+      "temporary_direct_subscribe": false
+     },
+     "vendor_blackbox": false,
+     "publishes_tf": false,
+     "sends_motion_command": false,
+     "optional": false
+    },
+    {
+     "id": "body_imu",
+     "role": "IMU",
+     "clock_domain": "box",
+     "sync_tier_required": "T2",
+     "frame_id": "base_imu",
+     "custom_role": "",
+     "schema_ref": "",
+     "openness": "BUILTIN_ROLE",
+     "hosted_by": "body_main",
+     "abstraction_level": "SAMPLED_DEVICE",
+     "extrinsic_source": "MECHANICAL_DESIGN",
+     "intrinsic_ref": "",
+     "rate_hz": 200.0,
+     "sync_class_declared": "S1_HOST_OFFSET",
+     "trigger_capability": "FREE_RUN",
+     "transport": {
+      "type": "sim",
+      "iface": "",
+      "peer": "",
+      "endpoint": "",
+      "channel": "",
+      "device": "",
+      "timestamp_capability": "SW_KERNEL"
+     },
+     "delivery": "INPROC",
+     "protocol": "",
+     "protocol_args": {},
+     "vendor_blackbox": false,
+     "publishes_tf": false,
+     "sends_motion_command": false,
+     "optional": false
+    },
+    {
+     "id": "lidar_front",
+     "role": "LIDAR",
+     "clock_domain": "sim_lidar_front",
+     "sync_tier_required": "T2",
+     "frame_id": "lidar_front",
+     "custom_role": "",
+     "schema_ref": "schemas/lidar_frame.v2.schema.json",
+     "openness": "BUILTIN_ROLE",
+     "hosted_by": "body_main",
+     "abstraction_level": "SAMPLED_DEVICE",
+     "extrinsic_source": "MECHANICAL_DESIGN",
+     "intrinsic_ref": "",
+     "rate_hz": 10.0,
+     "bandwidth_mbps": 20.7,
+     "sync_class_declared": "S1_HOST_OFFSET",
+     "trigger_capability": "FREE_RUN",
+     "transport": {
+      "type": "sim",
+      "iface": "",
+      "peer": "",
+      "endpoint": "",
+      "channel": "",
+      "device": "",
+      "timestamp_capability": "SW_KERNEL"
+     },
+     "delivery": "INPROC",
+     "protocol": "",
+     "protocol_args": {},
+     "vendor_blackbox": false,
+     "publishes_tf": false,
+     "sends_motion_command": false,
+     "optional": false
+    },
+    {
+     "id": "lidar_rear",
+     "role": "LIDAR",
+     "clock_domain": "sim_lidar_rear",
+     "sync_tier_required": "T2",
+     "frame_id": "lidar_rear",
+     "custom_role": "",
+     "schema_ref": "schemas/lidar_frame.v2.schema.json",
+     "openness": "BUILTIN_ROLE",
+     "hosted_by": "body_main",
+     "abstraction_level": "SAMPLED_DEVICE",
+     "extrinsic_source": "MECHANICAL_DESIGN",
+     "intrinsic_ref": "",
+     "rate_hz": 10.0,
+     "bandwidth_mbps": 20.7,
+     "sync_class_declared": "S1_HOST_OFFSET",
+     "trigger_capability": "FREE_RUN",
+     "transport": {
+      "type": "sim",
+      "iface": "",
+      "peer": "",
+      "endpoint": "",
+      "channel": "",
+      "device": "",
+      "timestamp_capability": "SW_KERNEL"
+     },
+     "delivery": "INPROC",
+     "protocol": "",
+     "protocol_args": {},
+     "vendor_blackbox": false,
+     "publishes_tf": false,
+     "sends_motion_command": false,
+     "optional": false
+    },
+    {
+     "id": "foot_contact",
+     "role": "CUSTOM",
+     "clock_domain": "box",
+     "sync_tier_required": "T2",
+     "frame_id": "base_feet",
+     "custom_role": "FOOT_CONTACT",
+     "schema_ref": "schemas/foot_contact.v1.schema.json",
+     "openness": "CUSTOM_ROLE",
+     "hosted_by": "body_main",
+     "abstraction_level": "SAMPLED_DEVICE",
+     "extrinsic_source": "MECHANICAL_DESIGN",
+     "intrinsic_ref": "",
+     "rate_hz": 50.0,
+     "sync_class_declared": "S1_HOST_OFFSET",
+     "trigger_capability": "FREE_RUN",
+     "transport": {
+      "type": "sim",
+      "iface": "",
+      "peer": "",
+      "endpoint": "",
+      "channel": "",
+      "device": "",
+      "timestamp_capability": "SW_KERNEL"
+     },
+     "delivery": "INPROC",
+     "protocol": "",
+     "protocol_args": {},
+     "vendor_blackbox": false,
+     "publishes_tf": false,
+     "sends_motion_command": false,
+     "optional": false
+    }
+   ],
+   "hosts": [
+    {
+     "id": "body_main",
+     "role": "BODY",
+     "clock_domain": "box",
+     "abstraction_level": "SUBSYSTEM",
+     "capability_ref": "capabilities/sim_quad.body.yaml",
+     "transport": {
+      "type": "sim",
+      "iface": "",
+      "peer": "",
+      "endpoint": "",
+      "channel": "",
+      "device": "",
+      "timestamp_capability": "SW_KERNEL"
+     },
+     "protocol": "",
+     "protocol_args": {},
+     "frame_id": "base_link",
+     "optional": false
+    }
+   ]
+  },
+  "description": {
+   "kind": "description",
+   "description": {
+    "base_link": "base_link",
+    "urdf_ref": "models/s10_mjcf/urdf/S10.urdf",
+    "extrinsics": [
+     {
+      "frame_id": "base_imu",
+      "xyz": [
+       0.0075,
+       -0.0373,
+       0.0556
+      ],
+      "quat_xyzw": [
+       0.5,
+       0.5,
+       -0.499602,
+       0.500398
+      ],
+      "source": "MECHANICAL_DESIGN",
+      "parent": "base_link",
+      "calibrated_at": "",
+      "notes": "手册 IMU (7.5, -37.3, 55.6) mm。**姿态不是单位四元数**： URDF 的 imu_joint 带 rpy=(1.57, 1.57, 0)，IMU 芯片装配方向与本体系差两个 90°。 漏掉它会让加速度/角速度的三轴对不上——数值看着合理，方向全错。\n"
+     },
+     {
+      "frame_id": "lidar_front",
+      "xyz": [
+       0.22341,
+       0.0,
+       -0.0001
+      ],
+      "quat_xyzw": [
+       0.0,
+       0.70710678,
+       0.0,
+       0.70710678
+      ],
+      "source": "MECHANICAL_DESIGN",
+      "parent": "base_link",
+      "calibrated_at": "",
+      "notes": "手册前激光雷达 (223.35, 0, -0.1) mm。姿态是绕 y **+90°**（Airy-v 朝前）： gpu_lidar 的 +Z 是光轴 / 半球轴，转完之后半球沿 base +X。 URDF 的 front_lidar_joint 是 rpy=0，那是机械 link 系，不是光学系—— 两者差这个 90°。不要改回单位四元数：半球会朝天，前方没有覆盖。\n"
+     },
+     {
+      "frame_id": "lidar_rear",
+      "xyz": [
+       -0.22341,
+       0.0,
+       -0.0001
+      ],
+      "quat_xyzw": [
+       0.0,
+       -0.70710678,
+       0.0,
+       0.70710678
+      ],
+      "source": "MECHANICAL_DESIGN",
+      "parent": "base_link",
+      "calibrated_at": "",
+      "notes": "手册后激光雷达 (-223.35, 0, -0.1) mm。绕 y **-90°**，半球沿 base -X。 不是 yaw 180°：Airy 垂直 FOV 是 0~90° 的半球，yaw 180° 只是把朝上的 半球转一圈，仍然朝天，后向照样没有覆盖。\n"
+     },
+     {
+      "frame_id": "base_feet",
+      "xyz": [
+       0.0,
+       0.0,
+       0.0
+      ],
+      "quat_xyzw": [
+       0.0,
+       0.0,
+       0.0,
+       1.0
+      ],
+      "source": "MECHANICAL_DESIGN",
+      "parent": "base_link",
+      "calibrated_at": "",
+      "notes": "足端接触是四路合成的一个源，没有单一物理位置，故挂 base_link 原点。 S10 四个轮心在 base_link 系的位置（**关节零位**，非当前站姿）： fl (+0.2277, +0.1812, -0.3600) / fr (+0.2277, -0.1812, -0.3600) / hl (-0.2277, +0.1812, -0.3600) / hr (-0.2277, -0.1812, -0.3600)， 轮半径 0.081、宽 0.037。轴距 0.4554、轮距 0.3624。 注意实际站姿由 build_quad_model.py 的 STANCE_RAD 决定，不一定是零位。\n"
+     }
+    ],
+    "intrinsics": [
+     {
+      "frame_id": "lidar_front",
+      "ref": "sensors/airy.lidar.yaml"
+     },
+     {
+      "frame_id": "lidar_rear",
+      "ref": "sensors/airy.lidar.yaml"
+     },
+     {
+      "frame_id": "base_imu",
+      "ref": "sensors/s10_body.imu.yaml"
+     }
+    ]
+   },
+   "calib_hash": "636843508c22da1e"
+  },
+  "clock_table": {
+   "kind": "clock_table",
+   "reference_id": 1,
+   "domains": [
+    {
+     "id": "box",
+     "domain_id": 1,
+     "sync_class": "S2_NET_SYNC",
+     "offset_ns": 0,
+     "drift_ppb": 0,
+     "sigma_ns": 0,
+     "effective_sigma_ns": 20000,
+     "trigger_group": null,
+     "locked": true,
+     "stale": false,
+     "last_update_ns": 0,
+     "observability": "仿真主钟，来自 /clock topic；其余域的偏差都相对它估计",
+     "is_reference": true,
+     "intra_domain_jitter_ns": 20000,
+     "trigger_jitter_ns": 10000,
+     "drift_sigma_ppb": 100,
+     "max_age_ns": 10000000000
+    },
+    {
+     "id": "sim_lidar_front",
+     "domain_id": 2,
+     "sync_class": "S1_HOST_OFFSET",
+     "offset_ns": 0,
+     "drift_ppb": 10,
+     "sigma_ns": 2000000,
+     "effective_sigma_ns": 2000000,
+     "trigger_group": null,
+     "locked": true,
+     "stale": false,
+     "last_update_ns": 1757142000004200000,
+     "observability": "前雷达域：gpu_lidar header.stamp 与仿真钟回归",
+     "is_reference": false,
+     "intra_domain_jitter_ns": -1,
+     "trigger_jitter_ns": 10000,
+     "drift_sigma_ppb": 100,
+     "max_age_ns": 10000000000
+    },
+    {
+     "id": "sim_lidar_rear",
+     "domain_id": 3,
+     "sync_class": "S1_HOST_OFFSET",
+     "offset_ns": 0,
+     "drift_ppb": 0,
+     "sigma_ns": 2000000,
+     "effective_sigma_ns": -1,
+     "trigger_group": null,
+     "locked": false,
+     "stale": true,
+     "last_update_ns": 0,
+     "observability": "后雷达域：gpu_lidar header.stamp 与仿真钟回归；与前雷达独立估计",
+     "is_reference": false,
+     "intra_domain_jitter_ns": -1,
+     "trigger_jitter_ns": 10000,
+     "drift_sigma_ppb": 100,
+     "max_age_ns": 10000000000
+    }
+   ],
+   "source_binding": {
+    "body_odom": "box",
+    "body_imu": "box",
+    "lidar_front": "sim_lidar_front",
+    "lidar_rear": "sim_lidar_rear",
+    "foot_contact": "box"
+   }
+  }
+ },
+ "DATA": {
+  "lidar_front": {
+   "topic": "/device/data/lidar_front",
+   "kind": "generic",
+   "payload": {
+    "kind": "generic",
+    "ts": {
+     "t_ref_ns": 1757142000000000000,
+     "t_src_ns": 1757142000000000000,
+     "t_rx_ns": 1757142000003200000,
+     "clock_domain": 2,
+     "sync_class": "S1_HOST_OFFSET",
+     "sigma_ns": 2000000,
+     "domain_locked": true
+    },
+    "source_id": "lidar_front",
+    "role_name": "LIDAR",
+    "fields": {
+     "point_count": 86400,
+     "valid_ratio": 0.3229,
+     "range_min": 5.0,
+     "range_max": 11.0,
+     "sampled": false,
+     "sector_00": 5.001,
+     "sector_01": 5.0,
+     "sector_02": 8.01,
+     "sector_03": 8.042,
+     "sector_04": 5.0,
+     "sector_05": 5.0,
+     "sector_06": 8.031,
+     "sector_07": 8.021,
+     "sector_08": 5.0,
+     "sector_09": 5.0,
+     "sector_10": 8.052,
+     "sector_11": 8.0,
+     "pc_layout": "range_u16/v2",
+     "fields": "range:0:4:1,intensity:2:2:1",
+     "point_step": 3,
+     "width": 900,
+     "height": 96,
+     "row_step": 2700,
+     "is_bigendian": false,
+     "is_dense": true,
+     "range_scale": 0.005,
+     "range_invalid": 0,
+     "h_min_angle": -3.14159,
+     "h_max_angle": 3.14159,
+     "v_min_angle": 0.0,
+     "v_max_angle": 1.5708
+    },
+    "schema_ref": "schemas/lidar_frame.v2.schema.json",
+    "raw": "<bytes len=259200 first16hex=4006003306002706001a06000e060001 — msgpack(tzcomm): native bin; JSON(record/legacy): base64>"
+   },
+   "envelope_example": {
+    "v": 1,
+    "topic": "/device/data/lidar_front",
+    "port": "DATA",
+    "rt": "pub",
+    "kind": "generic",
+    "id": 1234,
+    "seq": 1234,
+    "tx_ns": 1757142000004700000,
+    "src": "device",
+    "payload": "<the payload above>"
+   }
+  },
+  "body_imu": {
+   "topic": "/device/data/body_imu",
+   "kind": "imu",
+   "payload": {
+    "kind": "imu",
+    "ts": {
+     "t_ref_ns": 1757142000000000000,
+     "t_src_ns": 1757142000000000000,
+     "t_rx_ns": 1757142000003200000,
+     "clock_domain": 1,
+     "sync_class": "S2_NET_SYNC",
+     "sigma_ns": 20000,
+     "domain_locked": true
+    },
+    "angular_velocity": [
+     0.0012,
+     -0.0004,
+     0.21
+    ],
+    "linear_acceleration": [
+     0.03,
+     -0.01,
+     9.81
+    ]
+   }
+  },
+  "body_odom": {
+   "topic": "/device/data/body_odom",
+   "kind": "odometry",
+   "payload": {
+    "kind": "odometry",
+    "ts": {
+     "t_ref_ns": 1757142000000000000,
+     "t_src_ns": 1757142000000000000,
+     "t_rx_ns": 1757142000003200000,
+     "clock_domain": 1,
+     "sync_class": "S2_NET_SYNC",
+     "sigma_ns": 20000,
+     "domain_locked": true
+    },
+    "source_id": "body_odom",
+    "origin": "GROUND_TRUTH",
+    "pose": {
+     "xyz": [
+      1.25,
+      -0.4,
+      0.31
+     ],
+     "quat_xyzw": [
+      0.0,
+      0.0,
+      0.0998,
+      0.995
+     ]
+    },
+    "twist": {
+     "linear": [
+      0.5,
+      0.0,
+      0.0
+     ],
+     "angular": [
+      0.0,
+      0.0,
+      0.2
+     ]
+    },
+    "pose_cov": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "twist_cov": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "cov_origin": "VENDOR_DECLARED",
+    "valid_mask": 63,
+    "ref_epoch": 0
+   }
+  },
+  "foot_contact": {
+   "topic": "/device/data/foot_contact",
+   "kind": "generic",
+   "payload": {
+    "kind": "generic",
+    "ts": {
+     "t_ref_ns": 1757142000000000000,
+     "t_src_ns": 1757142000000000000,
+     "t_rx_ns": 1757142000003200000,
+     "clock_domain": 1,
+     "sync_class": "S2_NET_SYNC",
+     "sigma_ns": 20000,
+     "domain_locked": true
+    },
+    "source_id": "foot_contact",
+    "role_name": "FOOT_CONTACT",
+    "fields": {
+     "fl_contact": true,
+     "fr_contact": true,
+     "hl_contact": true,
+     "hr_contact": false,
+     "fl_force": 0.0,
+     "fr_force": 0.0,
+     "hl_force": 0.0,
+     "hr_force": 0.0,
+     "contact_count": 3
+    },
+    "schema_ref": "schemas/foot_contact.v1.schema.json"
+   }
+  }
+ },
+ "STATUS": {
+  "topic": "/device/status",
+  "messages": [
+   {
+    "kind": "self_check",
+    "payload": {
+     "kind": "self_check",
+     "order": [
+      "body_main",
+      "body_odom",
+      "body_imu",
+      "lidar_front",
+      "lidar_rear",
+      "foot_contact"
+     ],
+     "passed": true,
+     "items": [
+      {
+       "node_id": "body_odom",
+       "passed": true,
+       "detail": "ODOMETRY @ 50.0Hz · 钟域 box · 需要 T2",
+       "faults": []
+      },
+      {
+       "node_id": "body_imu",
+       "passed": true,
+       "detail": "IMU @ 200.0Hz · 钟域 box · 需要 T2",
+       "faults": []
+      },
+      {
+       "node_id": "lidar_front",
+       "passed": true,
+       "detail": "LIDAR @ 10.0Hz · 钟域 sim_lidar_front · 需要 T2",
+       "faults": []
+      },
+      {
+       "node_id": "lidar_rear",
+       "passed": true,
+       "detail": "LIDAR @ 10.0Hz · 钟域 sim_lidar_rear · 需要 T2",
+       "faults": [
+        {
+         "kind": "fault",
+         "code": 1349517377,
+         "domain": "TIME",
+         "subsystem": 7,
+         "vendor_code": 4,
+         "severity": "WARN",
+         "name": "SYNC_TIER_UNMET",
+         "message": "Source 'lidar_rear' 需要 T2（至少 S1_HOST_OFFSET），实际只有 S0_NONE（钟域 'sim_lidar_rear'）——该源的时间对齐质量不达标，能力位已标记降级，下游应按降级处理",
+         "via": [
+          {
+           "kind": "SOURCE",
+           "id": "lidar_rear"
+          },
+          {
+           "kind": "HOST",
+           "id": "body_main"
+          },
+          {
+           "kind": "BUS",
+           "id": "sim"
+          }
+         ],
+         "stamp_ns": 0,
+         "vendor_name": "",
+         "cleared": false
+        }
+       ]
+      },
+      {
+       "node_id": "foot_contact",
+       "passed": true,
+       "detail": "FOOT_CONTACT @ 50.0Hz · 钟域 box · 需要 T2",
+       "faults": []
+      },
+      {
+       "node_id": "<clock:pairwise>",
+       "passed": true,
+       "detail": "以下源对的 pairwise 为 UNKNOWN，不能直接对齐: ['body_odom↔lidar_rear', 'body_imu↔lidar_rear', 'lidar_front↔lidar_rear', 'lidar_rear↔foot_contact']",
+       "faults": []
+      }
+     ]
+    }
+   },
+   {
+    "kind": "fault",
+    "payload": {
+     "kind": "fault",
+     "code": 1349517377,
+     "domain": "TIME",
+     "subsystem": 7,
+     "vendor_code": 4,
+     "severity": "WARN",
+     "name": "SYNC_TIER_UNMET",
+     "message": "Source 'lidar_rear' 需要 T2（至少 S1_HOST_OFFSET），实际只有 S0_NONE（钟域 'sim_lidar_rear'）——该源的时间对齐质量不达标，能力位已标记降级，下游应按降级处理",
+     "via": [
+      {
+       "kind": "SOURCE",
+       "id": "lidar_rear"
+      },
+      {
+       "kind": "HOST",
+       "id": "body_main"
+      },
+      {
+       "kind": "BUS",
+       "id": "sim"
+      }
+     ],
+     "stamp_ns": 0,
+     "vendor_name": "",
+     "cleared": false
+    }
+   },
+   {
+    "kind": "device_status",
+    "payload": {
+     "kind": "device_status",
+     "stamp_ns": 1757142000004200000,
+     "state": "ACTIVE",
+     "mode": "STAND",
+     "terrain_mode": "FLAT",
+     "arbiter_holder": null
+    }
+   },
+   {
+    "kind": "health",
+    "payload": {
+     "kind": "health",
+     "source_id": "body_odom",
+     "online": true,
+     "samples": 0,
+     "dropped": 0,
+     "protocol_errors": 0,
+     "timestamp_jumps": 0,
+     "last_sample_ns": 0,
+     "last_error": "",
+     "drop_rate": 0.0
+    }
+   },
+   {
+    "kind": "health",
+    "payload": {
+     "kind": "health",
+     "source_id": "body_imu",
+     "online": true,
+     "samples": 0,
+     "dropped": 0,
+     "protocol_errors": 0,
+     "timestamp_jumps": 0,
+     "last_sample_ns": 0,
+     "last_error": "",
+     "drop_rate": 0.0
+    }
+   },
+   {
+    "kind": "health",
+    "payload": {
+     "kind": "health",
+     "source_id": "lidar_front",
+     "online": true,
+     "samples": 0,
+     "dropped": 0,
+     "protocol_errors": 0,
+     "timestamp_jumps": 0,
+     "last_sample_ns": 0,
+     "last_error": "",
+     "drop_rate": 0.0
+    }
+   },
+   {
+    "kind": "health",
+    "payload": {
+     "kind": "health",
+     "source_id": "lidar_rear",
+     "online": true,
+     "samples": 0,
+     "dropped": 0,
+     "protocol_errors": 0,
+     "timestamp_jumps": 0,
+     "last_sample_ns": 0,
+     "last_error": "",
+     "drop_rate": 0.0
+    }
+   },
+   {
+    "kind": "health",
+    "payload": {
+     "kind": "health",
+     "source_id": "foot_contact",
+     "online": true,
+     "samples": 0,
+     "dropped": 0,
+     "protocol_errors": 0,
+     "timestamp_jumps": 0,
+     "last_sample_ns": 0,
+     "last_error": "",
+     "drop_rate": 0.0
+    }
+   },
+   {
+    "kind": "clock_domain_update",
+    "payload": {
+     "kind": "clock_domain_update",
+     "stamp_ns": 1757142000004200000,
+     "reference_id": 1,
+     "domains": [
+      {
+       "id": "box",
+       "domain_id": 1,
+       "sync_class": "S2_NET_SYNC",
+       "offset_ns": 0,
+       "drift_ppb": 0,
+       "sigma_ns": 0,
+       "effective_sigma_ns": 20000,
+       "trigger_group": null,
+       "locked": true,
+       "stale": false,
+       "last_update_ns": 0,
+       "observability": "仿真主钟，来自 /clock topic；其余域的偏差都相对它估计",
+       "is_reference": true,
+       "intra_domain_jitter_ns": 20000,
+       "trigger_jitter_ns": 10000,
+       "drift_sigma_ppb": 100,
+       "max_age_ns": 10000000000
+      },
+      {
+       "id": "sim_lidar_front",
+       "domain_id": 2,
+       "sync_class": "S1_HOST_OFFSET",
+       "offset_ns": 0,
+       "drift_ppb": 10,
+       "sigma_ns": 2000000,
+       "effective_sigma_ns": 2000000,
+       "trigger_group": null,
+       "locked": true,
+       "stale": false,
+       "last_update_ns": 1757142000004200000,
+       "observability": "前雷达域：gpu_lidar header.stamp 与仿真钟回归",
+       "is_reference": false,
+       "intra_domain_jitter_ns": -1,
+       "trigger_jitter_ns": 10000,
+       "drift_sigma_ppb": 100,
+       "max_age_ns": 10000000000
+      },
+      {
+       "id": "sim_lidar_rear",
+       "domain_id": 3,
+       "sync_class": "S1_HOST_OFFSET",
+       "offset_ns": 0,
+       "drift_ppb": 0,
+       "sigma_ns": 2000000,
+       "effective_sigma_ns": -1,
+       "trigger_group": null,
+       "locked": false,
+       "stale": true,
+       "last_update_ns": 0,
+       "observability": "后雷达域：gpu_lidar header.stamp 与仿真钟回归；与前雷达独立估计",
+       "is_reference": false,
+       "intra_domain_jitter_ns": -1,
+       "trigger_jitter_ns": 10000,
+       "drift_sigma_ppb": 100,
+       "max_age_ns": 10000000000
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "notes": {
+  "T_SIM_ns": 12345678000,
+  "sim_to_wall_offset_ns": 1757141987654322000,
+  "t_src_ns = sim_stamp + offset": 1757142000000000000,
+  "t_rx_ns (bridge callback wall)": 1757142000003200000,
+  "tick now_ns": 1757142000004200000,
+  "raw_len": 259200
+ }
+}
