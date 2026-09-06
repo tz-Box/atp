@@ -130,6 +130,27 @@ policy 权重 SHA-256 · scene id · seed · 出生位姿（`set_pose` 回同一
 > **ATP 待办**：教程第 4 关那条纪律现写成无条件的，**是错的**，须改为
 > 「逐位可复现只对**由 ATP 驱动 `now_ns`** 的通路、以及 **replay 开环**成立；经 sim / 真机不成立」。
 
+## 2.4 ★对齐基线：两仓分支名不同，必须成对引用
+
+ATP 一度按 M 提到的 `feature/first_stage` 去找 simulator 的分支 —— **那是 device 仓的分支名**。
+ATP 已自查两仓 `git branch -a` 确认：
+
+| 仓 | 对齐分支 | HEAD | main 停在 |
+|---|---|---|---|
+| **pbox-simulator** | **`feature/dynamics`** | `7b5ddf3` (2026-09-04) | `389388f` (2026-08-27) |
+| **tz_patrol_box_device** | **`feature/first_stage`** | `b4de5b0` (2026-09-04) | `567d251` (2026-08-25) |
+
+**simulator 仓没有 `feature/first_stage`；device 仓没有 `feature/dynamics`。两者是同一时期的一对。**
+
+**必须按这一对对齐，不能用 main**：odom 六自由度（`a3e1945`）、IMU 参考系改 ENU 且裸 IMU
+不伪造姿态（`c3d1cde`）、IMU 量程限幅（`e9905e6`）、`lidar_frame.v2` 描述符（`d84f037`）、
+data_check、场景层 —— **全部只在 `feature/dynamics`**。
+simulator 的 `main` 停在 8/27，缺这些，反而与 device 的 `feature/first_stage`（已合
+`lidar-frame-v2`）**对不上**。
+
+> **这条本身值得留档**：分支名不同又必须成对，下一个人还会按名字找。
+> 「两仓分支策略是否统一（都合回 main 打 tag）」→ §7.2 候选 6，归 M。
+
 ## 3. 进程模型与编排
 
 ### 3.1 四进程（simulator 建议，ATP 采纳）
@@ -277,6 +298,35 @@ IMU/odom 是强类型样本没有 `fields` 可放，但 SLAM 的 GT 对齐按点
 没有它，就只能静默算出垃圾。**所以这个键不只是提精度，它让退化情形从不可见变成可判**
 —— 与 §2 「报文要能发现自己漏了东西」是同一条。
 
+**发生范围（simulator 界定，理由保留但要写准）**：gz 传感器 header stamp 就是仿真时刻，
+仿真从 0 起跑，故这条 `else wall` 是给**启动窗口**的兜底；第二个窗口是 **`reset.all`**
+（仿真时间跳回 0，之后一段帧 stamp 又从 0 开始 —— 这也是 D22 让评测用 `model_only` 的理由之一）。
+**稳态运行中 header 戳不会是 0，不是随机异常。**
+→ ATP converter 拿到 `stamp_sim_ns == 0` 应**丢帧并计数**，不是报故障
+（data_check 的 `Bundle.WARMUP_S = 1.0` 丢开头一秒是同一件事）。
+
+**旧版本上的替代判据**（没有 `stamp_sim_ns` 时可用，但不如显式键可靠）：
+`t_src_ns == t_rx_ns` —— 退化时两者同为 `wall` 故相等；正常帧相差传输延迟，
+但理论上也可能碰巧相等。
+
+#### ★这条退化不只是精度问题，它是契约偏离（device 提出，ATP 复核确认）
+
+契约 R3 规定：**设备没给时戳时 `t_src_ns = 0`**，`timebase.resolve` 据此判 `degraded`、
+退化为 `t_ref = t_rx` 并把本帧标 **`S0_NONE`**。ATP 已复核
+`tz_device_contract/timebase.py:377`：判据就是 `t_src_ns <= 0`。
+真机 adapter（mid360s / robosense / tron）都是这么做的。
+
+**bridge 填了墙钟之后，`resolve` 看到一个「像设备戳」的正数 → `degraded` 为假 →
+照 S1 走，帧头 `sync_class` 仍报 S1。降级被掩盖。**
+
+**对 ATP 的直接后果**：§4.1 里「这两次评测可比吗」的答案取「每路样本 `sync_class` 的最低值」。
+启动窗口的帧自称 S1、实为 S0，**ATP 会报出比真实情况更好的可比性** ——
+本轮第三次撞见同一形态：**「测不准」与「没问题」由同一个字段表达。**
+
+> **注意：候选 1 修不了这条。** 即便拿到 `stamp_sim_ns`，帧头的 `sync_class` 照样在说谎；
+> ATP 只能靠自己重算来打补丁，而那等于在消费侧重写一遍生产侧的降级判定。
+> 故列为**独立候选 5**。改法在 simulator 一行（`else 0`），**不动契约**。
+
 **在此之前，ATP 不得声称 device·sim 面的 SLAM 绝对精度可信**，只能做相对比较。
 
 ## 5. ATP 侧必改清单
@@ -391,7 +441,9 @@ sim 在加载期还会拿 `scene/info` 对账。**ATP 的 body 应从 INFO 派�
 > `stamp_sim_ns` 是**真机没有的诊断键**，不是能力。**只许在 GT 对齐这条仿真专属路径上读它**，
 > **不得进入 backend 无关的解析路径** —— 否则切到真机时那条路径会**静默失去对齐**。
 > 这与「仿真只许更保守」不冲突（诊断键 ≠ 多给能力），但边界要守死。
+| **5** | **simulator 把 `_wall_stamps` 的 `else wall` 改为 `else 0`**（`gz_bridge.py:778`） | device 提出，ATP 复核 `timebase.py:377` 确认 | **建议做，且与候选 1 独立**（候选 1 修不了它）。现状偏离契约 R3：设备无时戳应填 0 让 `resolve` 判 S0；填墙钟会让**降级被掩盖**，帧头自称 S1。改动一行，**不动契约**，且与真机 adapter 行为一致。**风险要评**：`else 0` 后启动窗口的帧会正确地变成 S0，若 device/ATP 有地方对 S0 帧直接丢弃，观感是「启动时少几帧」——那是**正确行为**，但需 simulator 确认无下游按 S1 假设 |
 | 3 | `Check` 增结构化 `skip_kind`（`not_applicable`/`missing_input`/`insufficient_data`） | simulator | **不必等。** ATP 按 id 集合推断即可（§3.2） |
+| 6 | **两仓分支策略统一**（都合回 main 打 tag，或建立成对 tag） | simulator | 现状可用（成对引用已入档 §2.4），但**靠文档记住一对分支名是脆的**。合并时机归 M |
 | 4 | 四平台收件箱身份表加 simulator / device | ATP | 现走 session 消息：可行，但**不留档、不可审计**。三条查证纪律要求「结论要写进契约必须有对方确认」，而 session 消息给不出可回溯的回执。工具归 Hub owner |
 
 ### 7.3 ATP 侧待办（本轮不做，定稿后执行）
@@ -455,5 +507,6 @@ ATP 可以照它写解析与告警，不必等真机上出故障才发现自己�
 | 日期 | 变更 |
 |---|---|
 | 2026-09-06 | 草案 v0.1。三方两轮问答成文；ATP 侧未做任何代码改动。待补 §7.1。 |
+| 2026-09-06 | **v0.4**：新增 §2.4 对齐基线（sim=`feature/dynamics` / device=`feature/first_stage` 成对，ATP 自查两仓确认）。`:778` 退化经 device 指出**升格为契约偏离**（偏离 R3，掩盖 S0 降级；ATP 复核 `timebase.py:377` 确认）→ 独立列为**候选 5**，候选 1 修不了它。补退化的发生范围（启动窗口 / `reset.all`，非随机）与旧版替代判据。 |
 | 2026-09-06 | **v0.3**：三方交叉核对。§4.4 **我的请求字段被 simulator 更正**（`t_sim_ns` 是投递时刻的 `/clock`，非帧 header 戳，会带系统偏差）→ 改为 `stamp_sim_ns`；ATP 复核代码确认，并另发现 header 戳为 0 时 `t_src` 退化为墙钟（加强该请求）。§2.1 replay 措辞更正（`ts` 原样还原非重算）、mock 不确定性补两条成因。§5.2 #17 更正为 `CLAMPED`（非 `REJECTED`）+ 新增 #18 切档中间态。新增 §8.1 replay 严格档三条前置。 |
 | 2026-09-06 | **v0.2**：两侧答复到齐。§2 重写——分档轴改为「谁驱动 `now_ns`」，并调和 device/simulator 的时序-内容粒度差，得出**开环 replay 经 wire 亦逐位**；§4.4 **自估方案被证伪**，改为向 simulator 提 `t_sim_ns` 请求；§5.2 增 #14–17；新增 §8 样例已入库并逐条自查。 |
