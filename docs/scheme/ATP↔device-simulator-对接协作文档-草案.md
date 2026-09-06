@@ -305,9 +305,15 @@ IMU/odom 是强类型样本没有 `fields` 可放，但 SLAM 的 GT 对齐按点
 → ATP converter 拿到 `stamp_sim_ns == 0` 应**丢帧并计数**，不是报故障
 （data_check 的 `Bundle.WARMUP_S = 1.0` 丢开头一秒是同一件事）。
 
-**旧版本上的替代判据**（没有 `stamp_sim_ns` 时可用，但不如显式键可靠）：
-`t_src_ns == t_rx_ns` —— 退化时两者同为 `wall` 故相等；正常帧相差传输延迟，
-但理论上也可能碰巧相等。
+**过渡期探针**（候选 5 合入前可用；device 更正了我的措辞）：
+`ts.t_src_ns == ts.t_rx_ns`。我原写「可能碰巧相等」——**其实是恒等式**：
+`gz_bridge.py:770-779` 里 `t_src` 的回退值与 `t_rx` 取的是**同一个 `wall` 变量**，
+故受影响的帧必然相等；正常帧 `t_src = header_sim + offset` 与 `t_rx = wall` 是两个不同量，
+相差「渲染 + 传输」延迟，ns 分辨率下不会相等。
+
+> **这是过渡期探针，不是长期判据，也不是第二套降级判定。**
+> 候选 5 合入后这些帧 `t_src_ns` 变 0、`sync_class` 变 S0，等式检查自然失效 —— **届时删掉**。
+> 在 ATP 代码里必须带上这句注释，否则它会活成一条没人敢删的僵尸判据。
 
 #### ★这条退化不只是精度问题，它是契约偏离（device 提出，ATP 复核确认）
 
@@ -441,7 +447,7 @@ sim 在加载期还会拿 `scene/info` 对账。**ATP 的 body 应从 INFO 派�
 > `stamp_sim_ns` 是**真机没有的诊断键**，不是能力。**只许在 GT 对齐这条仿真专属路径上读它**，
 > **不得进入 backend 无关的解析路径** —— 否则切到真机时那条路径会**静默失去对齐**。
 > 这与「仿真只许更保守」不冲突（诊断键 ≠ 多给能力），但边界要守死。
-| **5** | **simulator 把 `_wall_stamps` 的 `else wall` 改为 `else 0`**（`gz_bridge.py:778`） | device 提出，ATP 复核 `timebase.py:377` 确认 | **建议做，且与候选 1 独立**（候选 1 修不了它）。现状偏离契约 R3：设备无时戳应填 0 让 `resolve` 判 S0；填墙钟会让**降级被掩盖**，帧头自称 S1。改动一行，**不动契约**，且与真机 adapter 行为一致。**风险要评**：`else 0` 后启动窗口的帧会正确地变成 S0，若 device/ATP 有地方对 S0 帧直接丢弃，观感是「启动时少几帧」——那是**正确行为**，但需 simulator 确认无下游按 S1 假设 |
+| **5** | **simulator 把 `_wall_stamps` 的 `else wall` 改为 `else 0`**（`gz_bridge.py:778`） | device 提出，ATP 复核 `timebase.py:377` 确认 | **建议做，且与候选 1 独立**（候选 1 修不了它）。现状偏离契约 R3：设备无时戳应填 0 让 `resolve` 判 S0；填墙钟会让**降级被掩盖**，帧头自称 S1。改动一行，**不动契约**，且与真机 adapter 行为一致。**风险已答一半**（device）：契约层与 `tz_device_service` 对 S0 帧**不丢不拒** —— `resolve` 照发、`Shaper` 照过校验（`sigma_ns` 允许 -1）、DATA 口照发，L3 一致性测试有一条专门断言 S0 帧 `t_ref == t_rx`。**故下游若丢帧只可能在 simulator 自己或消费者侧，不在 device。** 待 simulator 确认自己这半 |
 | 3 | `Check` 增结构化 `skip_kind`（`not_applicable`/`missing_input`/`insufficient_data`） | simulator | **不必等。** ATP 按 id 集合推断即可（§3.2） |
 | 6 | **两仓分支策略统一**（都合回 main 打 tag，或建立成对 tag） | simulator | 现状可用（成对引用已入档 §2.4），但**靠文档记住一对分支名是脆的**。合并时机归 M |
 | 4 | 四平台收件箱身份表加 simulator / device | ATP | 现走 session 消息：可行，但**不留档、不可审计**。三条查证纪律要求「结论要写进契约必须有对方确认」，而 session 消息给不出可回溯的回执。工具归 Hub owner |
@@ -507,6 +513,7 @@ ATP 可以照它写解析与告警，不必等真机上出故障才发现自己�
 | 日期 | 变更 |
 |---|---|
 | 2026-09-06 | 草案 v0.1。三方两轮问答成文；ATP 侧未做任何代码改动。待补 §7.1。 |
+| 2026-09-06 | **v0.5**：过渡期探针措辞更正（`t_src==t_rx` 是恒等式而非巧合，同一 `wall` 变量），并标注为**用完即删**；候选 5 风险 device 侧答毕（契约层与 service 对 S0 帧不丢不拒，L3 有专测），余 simulator 半侧待答。三方对本轮全部结论**无分歧**。 |
 | 2026-09-06 | **v0.4**：新增 §2.4 对齐基线（sim=`feature/dynamics` / device=`feature/first_stage` 成对，ATP 自查两仓确认）。`:778` 退化经 device 指出**升格为契约偏离**（偏离 R3，掩盖 S0 降级；ATP 复核 `timebase.py:377` 确认）→ 独立列为**候选 5**，候选 1 修不了它。补退化的发生范围（启动窗口 / `reset.all`，非随机）与旧版替代判据。 |
 | 2026-09-06 | **v0.3**：三方交叉核对。§4.4 **我的请求字段被 simulator 更正**（`t_sim_ns` 是投递时刻的 `/clock`，非帧 header 戳，会带系统偏差）→ 改为 `stamp_sim_ns`；ATP 复核代码确认，并另发现 header 戳为 0 时 `t_src` 退化为墙钟（加强该请求）。§2.1 replay 措辞更正（`ts` 原样还原非重算）、mock 不确定性补两条成因。§5.2 #17 更正为 `CLAMPED`（非 `REJECTED`）+ 新增 #18 切档中间态。新增 §8.1 replay 严格档三条前置。 |
 | 2026-09-06 | **v0.2**：两侧答复到齐。§2 重写——分档轴改为「谁驱动 `now_ns`」，并调和 device/simulator 的时序-内容粒度差，得出**开环 replay 经 wire 亦逐位**；§4.4 **自估方案被证伪**，改为向 simulator 提 `t_sim_ns` 请求；§5.2 增 #14–17；新增 §8 样例已入库并逐条自查。 |
