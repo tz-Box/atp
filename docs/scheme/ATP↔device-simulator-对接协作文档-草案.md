@@ -82,12 +82,17 @@ ATP 现有纪律（教程第 4 关 §4.3 ⑧）：*同样的 testcase + 同样�
 | device · sim / 真机（任何方式） | 墙钟 + gz + policy 线程 | 不确定 | 否 | 统计一致 + 容差带 |
 
 **为什么 replay 与 mock 在 wire 上分开**（关键，别记混）：
-- **replay 不积分**。`ReplaySource._acquire` 按录制的**全局顺序**在 `poll_all` 固定遍历序里认领，
-  与 tick 落在哪一刻无关；`ts` 由录制头的钟域快照重算（`freeze_at_snapshot`），
-  故 `t_ref/sigma/sync_class` 也逐位一致。**tick 抖动只改「什么时候拿到」，不改「拿到什么」。**
-- **mock 要积分**。`MockWorld.integrate(now_ns)` 的 dt 取自传入的 `now_ns`；
-  经 `serve.py` 时 `now_ns = box_now_ns()` 是墙钟，**dt 随调度变 → 样本值就变**。
-  进程内由 ATP 递增 `now_ns` 时它才逐位（噪声取 `seed:source_id` 派生的独立 PRNG）。
+- **replay 不积分**。`ReplaySource._acquire` 走 `parse_sample`，按录制的**全局顺序**在
+  `poll_all` 固定遍历序里认领；`ts` 是 `parse_timestamp_set(d["ts"])` **原样还原，不是重算**
+  （device 更正其初稿措辞）。`freeze_at_snapshot` 冻的是**钟域表的新鲜度判据**
+  （pairwise / sweep_stale 用），**样本头一个字节都不动**。
+  所以确定性比「重算后一致」更硬 —— **就是录制文件里那份**。
+  **tick 抖动只改「什么时候拿到」，不改「拿到什么」。**
+- **mock 要积分**，三处都指向不确定：① `MockWorld.integrate(now_ns)` 的 dt 取自传入值；
+  ② 每路 `_due(now_ns)` 按 `rate_hz` 与传入时刻比 → **样本条数**随墙钟变，**序列长度都不同**；
+  ③ `_device_ts` 用 `now_ns` 造 `t_src` → 时戳全是墙钟。
+  经 `serve.py` 时 `now_ns = box_now_ns()` 是墙钟，故三条全中；
+  进程内由 ATP 递增 `now_ns` 时才逐位（噪声取 `seed:source_id` 派生的独立 PRNG）。
 
 ※ **replay 经 wire 的两个前提，缺一不可**：
 1. 该路 DATA 用 **`tcp`**（udp 组播丢片 → 序列变 → 内容就不再一致）；
@@ -239,6 +244,39 @@ bridge 在 lidar 快照里**其实算了 `t_sim_ns`**，但 `GzLidar._NOT_FIELDS
 且顺带**看见 offset 的漂移**（从不可见变成可观测，比精度本身更重要）。
 IMU/odom 是强类型样本没有 `fields` 可放，但 SLAM 的 GT 对齐按点云帧就够。
 
+#### ★更正（simulator 核查 + ATP 复核代码，2026-09-06）：要的不是 `t_sim_ns`
+
+我上一版把请求写成「把 `t_sim_ns` 放出来」。**这是错的，原样放出去会给一个带系统偏差的 offset。**
+
+`_wall_stamps()` 返回 `(t_src_wall, t_rx_wall, sim)`，第三项 `sim = self._latest.sim_time_ns`
+是**回调被投递那一刻的最新 `/clock` 值**，不是这一帧的 header 仿真戳。
+雷达 10Hz + GPU 渲染，两者在仿真轴上差「渲染 + 传输」延迟，可达几十 ms **且逐帧抖**。
+它在 bridge 里的用途是接触过期判定（用「现在的仿真时刻」判 age，**那是对的**），当帧时戳就错了。
+
+**ATP 已自行复核 `gz_bridge.py:762-779`，确认属实**（不采信转述）。
+
+要的对齐量是 **`t_src_ns − 帧的 header 仿真戳`** —— 由 `t_src = header_sim + offset` 整数运算，
+这个差**恰好等于该帧实际用的 offset，逐帧精确**。而 header 仿真戳现在没单独存进快照：
+`_on_lidar` 把 `_stamp_to_ns(msg.header.stamp)` 直接喂给 `_wall_stamps` 就丢了。
+
+**正确请求：快照多存一个键 `stamp_sim_ns = _stamp_to_ns(msg.header.stamp)`，
+`_NOT_FIELDS` 不剔它。** `t_sim_ns` 维持现状继续剔除（它是内部量）。
+
+> **这次更正本身值得记一笔**：我为了避开「自估 offset 会静默漂」，提了个
+> **会静默偏**的替代方案 —— 同一个失败形态，量级更小、更难发现。
+> device 读码时也没看出来。**两个人各自读代码都没发现，是第三个人逐行核出来的。**
+
+#### ATP 复核时多发现的一处（加强了这条请求的理由）
+
+`gz_bridge.py:778`：`t_src = (int(t_src_sim_ns) + offset) if t_src_sim_ns > 0 else wall`
+
+**header 仿真戳为 0/缺失时，`t_src` 直接退化成纯墙钟。** 此时 offset 根本不存在，
+而 ATP 若只拿 `t_src` 去减，会算出一个**量级荒谬但不会报错**的数。
+
+有了 `stamp_sim_ns`，ATP 能**当场判出这一帧的 offset 无定义**（`stamp_sim_ns == 0`）并标注；
+没有它，就只能静默算出垃圾。**所以这个键不只是提精度，它让退化情形从不可见变成可判**
+—— 与 §2 「报文要能发现自己漏了东西」是同一条。
+
 **在此之前，ATP 不得声称 device·sim 面的 SLAM 绝对精度可信**，只能做相对比较。
 
 ## 5. ATP 侧必改清单
@@ -268,7 +306,8 @@ IMU/odom 是强类型样本没有 `fields` 可放，但 SLAM 的 GT 对齐按点
 | 14 | **`fields` 里同时装着两类东西**：概览标量（`point_count/valid_ratio/range_min/max`、`sector_00..11`）与结构描述（压平的 `fields` 串、`point_step/width/height/...`）。`sector_*` 是**便利概览，不是判据**，别拿它替代解点云 |
 | 15 | **`foot_contact` 是 `generic` 但无 `raw`、无 `pc_layout`** —— 不要按「generic 必有 raw」写解码分支 |
 | 16 | **`body_odom` 的 `origin` 在仿真里是 `GROUND_TRUTH`**（本体被直接施加 twist）。但 `cov_origin` 不是 `TZ_CHARACTERIZED`。**绝不可当 GT 用**：GT 只走 `WorldProbe`。这条与 §6-1 是同一条原则 |
-| 17 | **`STAIR` 档没有 `vy`**（`cmd_dof=[vx,wz]`，`vx∈[-0.5,0.8]`）；`FLAT` 档三自由度全有。切档后仍按 `FLAT` 的包络发 `vy` → 被 `CLAMPED` 或 `REJECTED` |
+| 17 | **`STAIR` 档没有 `vy`**（`cmd_dof=[vx,wz]`，`vx∈[-0.5,0.8]`）；`FLAT` 三自由度全有。**结果状态要写精确**（device 更正）：不在 `cmd_dof` 的维**置零 + `clamped_mask` 置位**（bit1=vy），回执是 **`CLAMPED` 不是 `REJECTED`**，`applied[1]==0.0`。判据写成 `ack.status=="CLAMPED" and clamped_mask & 0b010`。`REJECTED` 只出现在：状态机门控（非 ACTIVE/DEGRADED）、未声明档位、adapter 下发失败；仲裁被抢占是 **`PREEMPTED`** |
+| 18 | **切档存在包络的中间态**：切档回执 ACCEPTED 之后、STATUS `pending_terrain_mode` 清空之前，**包络仍是旧档的**（mock/replay 当场落定，gz/真机不一定）。发新档指令前必须等 `pending_*` 清空（§5.3） |
 
 ### 5.3 闭环下行（CMD）语义
 
@@ -345,8 +384,13 @@ sim 在加载期还会拿 `scene/info` 对账。**ATP 的 body 应从 INFO 派�
 
 | # | 候选 | 提出方 | 我的建议 |
 |---|---|---|---|
-| **1** | **simulator 把 `t_sim_ns` 留在 lidar/foot_contact 的 `fields` 里**（现被 `GzLidar._NOT_FIELDS` 刻意剔除） | device 读码发现，ATP 提请求 | **建议做。** 改动面：一行；不动契约（`fields` 是自由字典）。收益：GT 对齐从「自估且会静默漂」变成「逐帧精确且漂移可观测」。**替代方案（ATP 自估）已被证伪** —— 见 §4.4。若 simulator 不接，再上候选 2 交 M |
+| **1** | **simulator 在 lidar（及 foot_contact）快照里新增 `stamp_sim_ns = _stamp_to_ns(msg.header.stamp)`，`_NOT_FIELDS` 不剔它**（`t_sim_ns` 维持现状继续剔除） | device 读码提出 → **simulator 核查后更正了字段** → ATP 复核代码确认 | **建议做。** 改动面：`gz_bridge.py` 两处回调各一行 + `sources.py` 一行 + `lidar_frame.v2.schema.json` 一条**可选**字段；**不碰契约层、不碰线格式**。三方各自查证均无副作用：`GenericSample.fields` 是无属性约束的 `object`，`Shaper` 只裁顶层键，`validate.py` 不逐样本按字段表校验，测试未钉键集合。收益有两层：① GT 对齐逐帧精确；② **`stamp_sim_ns==0` 时能判出 offset 无定义**（§4.4），退化情形从不可见变成可判。simulator 表示若批准可当场做并补一条测试钉住「它等于 header stamp 而不是 `/clock`」 |
 | 2 | **契约级**：把仿真钟当独立钟域，`t_src` 保留仿真戳而不映到墙钟 | device | 这才是「`t_src` 永不改写」的本意，但**动契约语义 + simulator 时间模型**。仅在候选 1 被拒时才提 |
+
+> **候选 1 若批准，ATP 侧的使用约束（simulator 提，ATP 接受并写进代码注释）**：
+> `stamp_sim_ns` 是**真机没有的诊断键**，不是能力。**只许在 GT 对齐这条仿真专属路径上读它**，
+> **不得进入 backend 无关的解析路径** —— 否则切到真机时那条路径会**静默失去对齐**。
+> 这与「仿真只许更保守」不冲突（诊断键 ≠ 多给能力），但边界要守死。
 | 3 | `Check` 增结构化 `skip_kind`（`not_applicable`/`missing_input`/`insufficient_data`） | simulator | **不必等。** ATP 按 id 集合推断即可（§3.2） |
 | 4 | 四平台收件箱身份表加 simulator / device | ATP | 现走 session 消息：可行，但**不留档、不可审计**。三条查证纪律要求「结论要写进契约必须有对方确认」，而 session 消息给不出可回溯的回执。工具归 Hub owner |
 
@@ -390,9 +434,26 @@ ATP 可以照它写解析与告警，不必等真机上出故障才发现自己�
 
 **用途**：converter 的回归 fixture（不需要 device 在跑）+ §3.2 门禁判据的样本。
 
+### 8.1 建 replay 严格档前必须知道的三条（device 提供）
+
+1. **replay 只吃 device 侧 `Recorder` 产出的 JSONL**（头行 `k:"header"` 带 `clock_snapshot` /
+   `config_source`，随后 `sample` / `cmd` / 事件行）。产出：配置 `record.enabled: true`
+   或 `tools/device_cli.py record <config> -o run.jsonl`。
+   **rosbag 不能直接喂 replay** —— 那条仍走 ATP 自己的 `DatasetWorld`。
+   > 这一条修正了我 §1.1 里「device 来源的 `DatasetWorld` 全部退役」的说法：
+   > **rosbag 那条留着**，退役的只是「ATP 自己扒 device 数据当 dataset」那条。
+2. **录制默认 `record.raw.mode: sidecar`**：点云字节在旁路 `<name>.jsonl.pc.bin`，
+   JSONL 行里只有 `{file,offset,size,codec}` 引用。
+   **拷 fixture 时两个文件必须一起走**，缺了读端抛 `RecordingError`。多分片才有 `.meta.json`。
+3. **tape 放完后的 `SOURCE_TIMEOUT` 是「放完了」，不是故障。**
+   `DeviceServer.open()` 对 replay 同样跑 `self_check + activate`；`ReplayBody.tick` 不跑心跳看门狗。
+   **ATP 的 World 判「本局结束」要以样本停止为准，不要以那条故障为准**
+   —— 否则每局 replay 都会以一条 fault 收尾，报告里天天挂着假故障。
+
 ## 变更记录
 
 | 日期 | 变更 |
 |---|---|
 | 2026-09-06 | 草案 v0.1。三方两轮问答成文；ATP 侧未做任何代码改动。待补 §7.1。 |
+| 2026-09-06 | **v0.3**：三方交叉核对。§4.4 **我的请求字段被 simulator 更正**（`t_sim_ns` 是投递时刻的 `/clock`，非帧 header 戳，会带系统偏差）→ 改为 `stamp_sim_ns`；ATP 复核代码确认，并另发现 header 戳为 0 时 `t_src` 退化为墙钟（加强该请求）。§2.1 replay 措辞更正（`ts` 原样还原非重算）、mock 不确定性补两条成因。§5.2 #17 更正为 `CLAMPED`（非 `REJECTED`）+ 新增 #18 切档中间态。新增 §8.1 replay 严格档三条前置。 |
 | 2026-09-06 | **v0.2**：两侧答复到齐。§2 重写——分档轴改为「谁驱动 `now_ns`」，并调和 device/simulator 的时序-内容粒度差，得出**开环 replay 经 wire 亦逐位**；§4.4 **自估方案被证伪**，改为向 simulator 提 `t_sim_ns` 请求；§5.2 增 #14–17；新增 §8 样例已入库并逐条自查。 |
