@@ -4,3 +4,6 @@ dataset:
   config: { n_testcases: 2, n_steps: 20, seed: 7 }
 checker: pipe.slam.ape
 checker_config: { ate_threshold: 0.2, rpe_threshold: 0.1 }
+metrics:                        # 指标方向声明：回归对比据此判好/坏，缺声明不判（不猜）
+  ate_rmse: { direction: lower }
+  rpe_rmse: { direction: lower }

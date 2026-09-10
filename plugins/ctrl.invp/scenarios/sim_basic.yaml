@@ -7,3 +7,9 @@ dataset:
       medium_push: { theta0: 0.10, theta_dot0: 0.2 }
 checker: ctrl.invp.upright
 checker_config: { settle_threshold: 0.02 }
+metrics:                        # 指标方向声明：回归对比据此判好/坏，缺声明不判（不猜）
+  survived: { direction: higher }
+  survival_time: { direction: higher }
+  upright_ratio: { direction: higher }
+  max_abs_theta: { direction: lower }
+  settle_error: { direction: lower }

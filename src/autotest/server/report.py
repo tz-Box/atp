@@ -54,8 +54,58 @@ def baseline_path_for(repo: Optional[str], root: Path) -> Path:
     return root / "baselines" / f"{baseline_slug(repo)}.json"
 
 
+def judge_delta(delta: float, direction: Optional[str]) -> str:
+    """单指标变化判定：better | worse | unchanged | undetermined。
+
+    方向来自被测仓 scenario.yaml 的 `metrics:` 声明（随 results 行的 `directions` 携带）。
+    没有声明就是 undetermined——**不猜**。此前方向被写死为「越小越好」，库里 7 个
+    在用指标有 3 个是越大越好（survived/survival_time/upright_ratio），
+    它们的劣化被成体系地报成改善（2026-09-10 实跑核实，2026-09-11 M 按缺陷批准修复）。
+    """
+    if delta == 0:
+        return "unchanged"
+    if direction == "lower":
+        return "better" if delta < 0 else "worse"
+    if direction == "higher":
+        return "better" if delta > 0 else "worse"
+    return "undetermined"
+
+
+def classify(judgements: dict[str, str]) -> str:
+    """指标判定集合 → testcase 级变化分类。
+
+    八态之五（另有 new / improved / regressed 来自基线缺行与 passed 翻转）：
+      no_comparable  无可比指标（两轮无同名指标）——独立成态，不并进 same
+      same           所有可比指标数值确实没变（事实，无需方向声明）
+      mixed          声明了方向的指标里有好有坏（确凿的「有涨有跌」，未知项不影响）
+      undetermined   有指标变了但缺方向声明，且已声明部分不足以定色——不猜
+      improved/worse 变化的指标全部有方向声明且同向
+
+    「确实没变化」「有涨有跌」「缺声明」「无可比指标」是四件事，此前挤在
+    同一个 `same` 里（那行注释自己写着病灶）；拆开是本次修复的另一半——
+    只加方向不拆态，典型真劣化仍会落回 `same`，看起来像修好了。
+    """
+    if not judgements:
+        return "no_comparable"
+    moved = [j for j in judgements.values() if j != "unchanged"]
+    if not moved:
+        return "same"
+    if "better" in moved and "worse" in moved:
+        return "mixed"
+    if "undetermined" in moved:
+        return "undetermined"
+    return "improved" if "better" in moved else "worse"
+
+
 def compare(baseline: dict, current: dict) -> list[dict]:
-    """按 testcase 对齐对比两轮评测，返回每 testcase 的对比明细。"""
+    """按 testcase 对齐对比两轮评测，返回每 testcase 的对比明细。
+
+    两层各守边界（M 2026-09-11）：
+    - 事实层：`deltas` 对可比指标**永远**给出（无需任何声明）；
+    - 判定层：`metric_judgements` 与 `change` 的好/坏只来自方向声明
+      （当前报文 results 行的 `directions`；基线里的声明不作数——声明以当前为准）。
+    passed 翻转优先于指标增减：pass/fail 本身是已声明判据的结论，不依赖方向。
+    """
     base_by_tc = {r["testcase_id"]: r for r in baseline.get("results", [])}
     rows: list[dict] = []
     for r in current.get("results", []):
@@ -72,24 +122,18 @@ def compare(baseline: dict, current: dict) -> list[dict]:
         for key in set(new_metrics) | set(old_metrics):
             if key in new_metrics and key in old_metrics:
                 deltas[key] = round(float(new_metrics[key]) - float(old_metrics[key]), 6)
+        directions = r.get("directions") or {}
+        judgements = {key: judge_delta(delta, directions.get(key))
+                      for key, delta in deltas.items()}
         row["baseline"] = old
         row["deltas"] = deltas
-        # 指标越小越好 → 差值为负 = 变好。passed 翻转优先于指标增减。
+        row["metric_judgements"] = judgements
         if r.get("passed") and not old.get("passed"):
             row["change"] = "improved"
         elif not r.get("passed") and old.get("passed"):
             row["change"] = "regressed"
-        elif deltas and all(v == 0 for v in deltas.values()):
-            # 逐指标完全一致 → same。此分支须在 improved/worse 之前：
-            # 全零同时满足 all(<=0) 与 all(>=0)，落到 improved 会把"什么都没变"
-            # 报成"变好了"（D1 的回归测试撞出来的相邻缺陷）。
-            row["change"] = "same"
-        elif deltas and all(v <= 0 for v in deltas.values()):
-            row["change"] = "improved"
-        elif deltas and all(v >= 0 for v in deltas.values()):
-            row["change"] = "worse"
         else:
-            row["change"] = "same"  # 有涨有跌，或无可比指标
+            row["change"] = classify(judgements)
         rows.append(row)
     return rows
 

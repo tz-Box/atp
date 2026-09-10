@@ -57,7 +57,8 @@ def hub():
 
 def _report(passed=(True, True), error=None) -> dict:
     results = [
-        {"testcase_id": f"tc{i}", "passed": p, "metrics": {"ape": 0.01 * (i + 1)}, "n_records": 10}
+        {"testcase_id": f"tc{i}", "passed": p, "metrics": {"ape": 0.01 * (i + 1)}, "n_records": 10,
+         "directions": {"ape": "lower"}}   # 方向声明（M 2026-09-11）：缺声明 compare 不判好坏
         for i, p in enumerate(passed)
     ]
     return {"job_id": "j1", "results": results, "error": error,
@@ -426,3 +427,66 @@ def test_declared_scenario_with_no_results_does_not_vanish():
     assert out["empty"]["testcases"] == {"passed": 0, "failed": 0}
     # 结论必须因此判失败——「没跑过」不能被当成「通过了」
     assert conclusion_of(None, results, expects) == "failure"
+
+
+# ---- vs_baseline 方向修复（M 2026-09-11 按缺陷批准）：两层各守边界 ----
+
+def test_vs_baseline_detail_two_layers():
+    """数值+delta 永远给（事实层）；红绿只在有方向声明时给（判定层）。
+
+    修复的缺陷：方向被写死「越小越好」，ctrl.invp 一族 5 指标 3 个越大越好，
+    survived 0.98→0.40 曾被报成 improved；典型真劣化（符号有涨有跌）则落 same。
+    """
+    from autotest.server.report import compare
+
+    baseline = {"results": [
+        {"testcase_id": "tc0", "passed": True,
+         "metrics": {"survived": 0.98, "foo": 1.0}},
+    ]}
+    current = {"results": [
+        {"testcase_id": "tc0", "passed": True,
+         "metrics": {"survived": 0.40, "foo": 1.3},
+         "directions": {"survived": "higher"}},
+        {"testcase_id": "tc1", "passed": True, "metrics": {"survived": 1.0},
+         "directions": {"survived": "higher"}},
+    ]}
+    rows = compare(baseline, current)
+    # survived 声明了方向：劣化就是劣化，不再反着报；foo 没声明：不猜 → 整行 undetermined
+    assert rows[0]["change"] == "undetermined"
+    assert rows[0]["metric_judgements"] == {"survived": "worse", "foo": "undetermined"}
+
+    detail = cb.baseline_detail(rows)
+    by_name = {e["name"]: e for e in detail[0]["metrics"]}
+    # 事实层：两个指标的 value/baseline/delta 都在，与有无声明无关
+    assert by_name["survived"]["baseline"] == 0.98
+    assert round(by_name["survived"]["delta"], 6) == -0.58
+    assert by_name["foo"]["delta"] == 0.3
+    # 判定层：只有声明过方向的指标有 direction 与好坏；foo 是 undetermined
+    assert by_name["survived"]["direction"] == "higher"
+    assert by_name["survived"]["judgement"] == "worse"
+    assert "direction" not in by_name["foo"]
+    assert by_name["foo"]["judgement"] == "undetermined"
+    # new 行：只有 value（没有可比对象），不给 delta/judgement
+    assert detail[1]["change"] == "new"
+    (entry,) = detail[1]["metrics"]
+    assert entry["value"] == 1.0 and "delta" not in entry and "judgement" not in entry
+
+
+def test_build_metrics_carries_detail_and_counts():
+    from autotest.server.report import compare
+
+    baseline = {"results": [{"testcase_id": "tc0", "passed": True,
+                             "metrics": {"ate_rmse": 0.10}}]}
+    rep = {"job_id": "j", "error": None, "comm_health": {"warnings": []},
+           "scenarios": [],
+           "results": [{"testcase_id": "tc0", "passed": True,
+                        "metrics": {"ate_rmse": 0.05},
+                        "directions": {"ate_rmse": "lower"}}]}
+    rows = compare(baseline, rep)
+    changes = cb.changes_of(rows)
+    assert changes == {"improved": 1}
+    m = cb.build_metrics(rep, changes, rows)
+    assert m["vs_baseline"] == {"improved": 1}
+    assert m["vs_baseline_detail"][0]["metrics"][0]["judgement"] == "better"
+    # rows 不给（无基线）→ 载荷里没有 detail 字段，消费方行为与今天一致
+    assert "vs_baseline_detail" not in cb.build_metrics(rep, None)

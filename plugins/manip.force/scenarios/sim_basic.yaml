@@ -7,3 +7,10 @@ dataset:
       firm_press: { target_force: 8.0 }    # 压实：高目标力
 checker: manip.force.track
 checker_config: { settle_threshold: 0.5 }
+metrics:                        # 指标方向声明：回归对比据此判好/坏，缺声明不判（不猜）。
+  survived: { direction: higher }
+  settle_error: { direction: lower }
+  overshoot: { direction: lower }
+  tracking_ratio: { direction: higher }
+  # peak_force / execution_time 有意不声明：它们是观测事实，孰优取决于工况——
+  # 回归报告只给数值与 delta，不上色（undetermined 正是给这类指标留的态）

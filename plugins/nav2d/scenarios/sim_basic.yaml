@@ -15,3 +15,7 @@ dataset:
         max_steps: 300
 checker: nav2d.default
 checker_config: { arrival_tolerance: 0.2, safety_margin: 0.3 }
+metrics:                        # 指标方向声明：回归对比据此判好/坏，缺声明不判（不猜）
+  arrived: { direction: higher }
+  path_success: { direction: higher }
+  safety_margin: { direction: higher }

@@ -79,7 +79,8 @@ def _expects_of(report: dict) -> dict:
             for sc in (report.get("scenarios") or []) if sc.get("id")}
 
 
-def build_metrics(report: dict, changes: Optional[dict] = None) -> dict:
+def build_metrics(report: dict, changes: Optional[dict] = None,
+                  rows: Optional[list] = None) -> dict:
     """结构化指标（总契约 §4.3 report.metrics，A11 定形）。
 
     存在的理由：Hub console 此前**正则解析 summary 文本**取逐场景结论，
@@ -89,6 +90,16 @@ def build_metrics(report: dict, changes: Optional[dict] = None) -> dict:
     ★消费方须用 expected/actual 推导四态，不要只看 met：
       pass/pass=通过　fail/fail=预期内失败(灰)　pass/fail=意外失败(红)
       fail/pass=**预期外通过**(红) —— 它不是失败，是**判据坏了**的信号。
+
+    ★vs_baseline 两层各守边界（M 2026-09-11）：
+      vs_baseline        变化分类计数。枚举 new/improved/regressed/worse/mixed/
+                         same/undetermined/no_comparable——same 只表示「确实没变化」，
+                         缺方向声明是 undetermined、无可比指标是 no_comparable，
+                         **消费方遇到未知枚举默认要人看，不是当没事**。
+      vs_baseline_detail 逐 testcase 逐指标：数值 + 基线 + delta **永远给**（事实），
+                         judgement（better/worse/unchanged/undetermined）只在有
+                         direction 声明时才可能给出好/坏——红绿只在有声明时上色，
+                         improved/worse 的支撑指标即在此核对。
     """
     results = report.get("results", [])
     outcomes = scenario_outcomes(results, _expects_of(report))
@@ -104,11 +115,40 @@ def build_metrics(report: dict, changes: Optional[dict] = None) -> dict:
     }
     if changes:
         metrics["vs_baseline"] = changes
+    if rows is not None:
+        metrics["vs_baseline_detail"] = baseline_detail(rows)
     return metrics
 
 
-def regression_changes(report: dict, repo: Optional[str] = None) -> Optional[dict]:
-    """与该 repo 的基线对比（先对比后滚动），返回 changes 计数；无基线返回 None。
+def baseline_detail(rows: list) -> list[dict]:
+    """compare 行 → 回调载荷的逐 testcase 逐指标明细（vs_baseline_detail）。
+
+    每指标一条：value 永远给；baseline/delta/judgement 仅当基线里有同名指标；
+    direction 仅当被测仓声明了方向。change=new 的行只有 value（没有可比对象）。
+    """
+    detail: list[dict] = []
+    for row in rows:
+        r = row["current"]
+        directions = r.get("directions") or {}
+        old_metrics = ((row.get("baseline") or {}).get("metrics")) or {}
+        judgements = row.get("metric_judgements") or {}
+        entries = []
+        for name, value in (r.get("metrics") or {}).items():
+            entry: dict = {"name": name, "value": value}
+            if name in directions:
+                entry["direction"] = directions[name]
+            if name in old_metrics:
+                entry["baseline"] = old_metrics[name]
+                entry["delta"] = (row.get("deltas") or {}).get(name)
+                entry["judgement"] = judgements.get(name)
+            entries.append(entry)
+        detail.append({"testcase_id": row["testcase_id"],
+                       "change": row["change"], "metrics": entries})
+    return detail
+
+
+def regression_rows(report: dict, repo: Optional[str] = None) -> Optional[list[dict]]:
+    """与该 repo 的基线对比（先对比后滚动），返回 compare 逐行明细；无基线返回 None。
 
     D1：基线按 repo 隔离。全局单文件时多算法仓会互相覆盖，双方回归对比同时
     退化为永久 `new`（且与"多场景前缀迁移首轮全记 new"这一已知良性现象同形，
@@ -117,8 +157,15 @@ def regression_changes(report: dict, repo: Optional[str] = None) -> Optional[dic
     baseline = load_baseline(baseline_path_for(repo, artifacts_root()))
     if baseline is None:
         return None
+    return compare(baseline, report)
+
+
+def changes_of(rows: Optional[list]) -> Optional[dict]:
+    """compare 行 → 变化分类计数（summary 与 metrics.vs_baseline 共用）。"""
+    if rows is None:
+        return None
     changes: dict[str, int] = {}
-    for row in compare(baseline, report):
+    for row in rows:
         changes[row["change"]] = changes.get(row["change"], 0) + 1
     return changes
 
@@ -176,7 +223,8 @@ def finalize_evaluation(eval_ctx: dict, report: dict, store: EvaluationStore,
     conclusion = conclusion_of(report.get("error"), report.get("results", []),
                                _expects_of(report))          # A11：按实际 vs 期望
     repo = eval_ctx.get("repo")
-    changes = regression_changes(report, repo)  # 先对比（基线按 repo 隔离，D1）
+    rows = regression_rows(report, repo)  # 先对比（基线按 repo 隔离，D1）
+    changes = changes_of(rows)
     summary = summarize(report, changes)
     store.update_terminal(cid, status=conclusion, summary=summary,
                           finished_at=datetime.now(timezone.utc).isoformat())
@@ -191,7 +239,7 @@ def finalize_evaluation(eval_ctx: dict, report: dict, store: EvaluationStore,
         log(f"[callback] 未配置 HUB_CALLBACK_URL/HUB_CALLBACK_TOKEN，跳过发送 cid={cid}")
         return
     payload = build_payload(cid, eval_ctx.get("sha"), conclusion, summary,
-                            build_metrics(report, changes))
+                            build_metrics(report, changes, rows))
     # 回调线程生命周期晚于 recorder.close()：日志走独立句柄 append（ArtifactRecorder.append_log）
     def _thread_log(message: str) -> None:
         ArtifactRecorder.append_log(report_dir, message)

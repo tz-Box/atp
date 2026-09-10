@@ -94,8 +94,29 @@ PMS「失败必通知」推飞书、Hub 概览失败数、交付物冻结判据�
 | `dataset.config` | dict | — | 数据集插件配置 |
 | `checker` | str | — | 判定插件命名空间键；空 = 数据流验证（不判 pass/fail） |
 | `checker_config` | dict | — | 判定插件配置（**判定阈值在此**，如 `settle_time_max: 2.0`） |
+| `metrics` | dict | — | **指标方向声明**（2026-09-11 增补）：`{指标名: {direction: lower\|higher}}`，见 §4.1 |
 | `sensor_config` | dict | — | `{类型: {实例名: topic}}`，经 INIT 下发 |
 | `hyperparams` | dict | — | 场景级算法超参 |
+
+### 4.1 `metrics` —— 指标方向声明（回归对比的好/坏依据）
+
+```yaml
+metrics:
+  survived: { direction: higher }      # 越大越好
+  settle_error: { direction: lower }   # 越小越好
+  # peak_force 有意不声明：观测事实，孰优取决于工况 → 回归报告只给数值与 delta，不上色
+```
+
+- 回归对比（`vs_baseline`）**只对声明了方向的指标给「变好/变差」判断**；
+  缺声明的指标只报数值与 delta，落「未判定」（undetermined）——**缺省不猜**。
+  修订动机：此前方向写死「越小越好」，`survived`/`upright_ratio` 这类越大越好的指标，
+  劣化会被反报成改善（2026-09-11 M 按缺陷批准修正）。
+- `same` 只表示「逐指标数值确实没变」；「声明的指标有好有坏」是 `mixed`、
+  「无可比指标」是 `no_comparable`——四件事各自成态，消费方不要把它们当同义词。
+- **声明写错会报错**（direction 非 `lower|higher`、多余键、扁平写法），不静默降级——
+  拼错的声明若被当成「未声明」，该指标会悄悄退回未判定态，没人发现。
+- 嵌套 dict 形状为趋势判据（`regression_tolerance` 等，批 2）在同处扩展预留。
+- 方向是指标的内在属性，不随清单项变化，故只在场景文件声明，清单项无覆盖键。
 
 ## 5. runtime 运行环境声明（R3，ATP 主责）
 

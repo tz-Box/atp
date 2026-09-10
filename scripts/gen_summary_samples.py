@@ -21,7 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from autotest.server.callback import build_metrics, summarize  # noqa: E402
+from autotest.server.callback import build_metrics, changes_of, summarize  # noqa: E402
+from autotest.server.report import compare  # noqa: E402
 
 
 def _rep(results, scenarios=None, error=None):
@@ -69,6 +70,61 @@ CASES = {
         [{"id": "degraded", "expect": "fail"}]),
 }
 
+# ---- vs_baseline 方向修复样本（M 2026-09-11 按缺陷批准）----
+# 两层各守边界：vs_baseline_detail 里数值+delta 永远给（事实层）；
+# judgement 的 better/worse 只在被测仓 scenario.yaml 声明了 direction 时出现（判定层）。
+# 分类枚举 new/improved/regressed/worse/mixed/same/undetermined/no_comparable——
+# same 只表示「确实没变化」；缺方向声明=undetermined；无可比指标=no_comparable。
+
+_INVP_DIRECTIONS = {"survived": "higher", "survival_time": "higher",
+                    "upright_ratio": "higher", "max_abs_theta": "lower",
+                    "settle_error": "lower"}
+
+
+def _invp_result(tc, metrics, passed=True, directions=_INVP_DIRECTIONS):
+    entry = {"testcase_id": tc, "passed": passed, "metrics": metrics, "n_records": 501}
+    if directions:
+        entry["directions"] = directions
+    return entry
+
+
+BASELINE_CASES = {
+    # ★修复动机的原型：大好指标降 + 小好指标升 = 典型真劣化（各指标仍在阈值内，
+    # passed 不翻转）。修复前符号有涨有跌走 else 落 `same`——完全不可见；
+    # 而 upright_ratio 0.95→0.55 若碰上小好指标恰好持平，还会被报成 improved（反了）。
+    # 现在方向已声明 → worse，三个 judgement 都能在 detail 里核对。
+    "vsb_true_regression_now_visible": (
+        _rep([_invp_result("full:tc0", {"survived": 1.0, "survival_time": 10.0,
+                                        "upright_ratio": 0.95, "max_abs_theta": 0.05,
+                                        "settle_error": 0.010}, directions=None)]),
+        _rep([_invp_result("full:tc0", {"survived": 1.0, "survival_time": 10.0,
+                                        "upright_ratio": 0.55, "max_abs_theta": 0.19,
+                                        "settle_error": 0.018})],
+             [{"id": "full", "expect": "pass"}]),
+    ),
+    # 新八态一次给全：improved（声明且同向变好）/ undetermined（指标变了但没声明方向）
+    # / mixed（声明的指标有好有坏）/ same（确实没变化）/ no_comparable（无可比指标）/ new
+    "vsb_all_states": (
+        _rep([
+            _invp_result("a:tc0", {"survived": 0.90, "settle_error": 0.020}, directions=None),
+            {"testcase_id": "a:tc1", "passed": True, "metrics": {"foo": 1.0}, "n_records": 10},
+            _invp_result("a:tc2", {"survived": 0.90, "settle_error": 0.020}, directions=None),
+            _invp_result("a:tc3", {"survived": 0.90, "settle_error": 0.020}, directions=None),
+            {"testcase_id": "a:tc4", "passed": None, "metrics": None, "n_records": 42},
+        ]),
+        _rep([
+            _invp_result("a:tc0", {"survived": 0.98, "settle_error": 0.012}),   # improved
+            {"testcase_id": "a:tc1", "passed": True, "metrics": {"foo": 1.3},   # undetermined
+             "n_records": 10},
+            _invp_result("a:tc2", {"survived": 0.95, "settle_error": 0.031}),   # mixed
+            _invp_result("a:tc3", {"survived": 0.90, "settle_error": 0.020}),   # same
+            {"testcase_id": "a:tc4", "passed": None, "metrics": None,           # no_comparable
+             "n_records": 42},
+            _invp_result("a:tc5", {"survived": 1.0, "settle_error": 0.009}),    # new
+        ], [{"id": "a", "expect": "pass"}]),
+    ),
+}
+
 _NOTE = ("由 autotest.server.callback 的真实代码路径生成（scripts/gen_summary_samples.py），非手编。"
          "★消费方应读 metrics 取事实；本文件的 summary 仅供文本兜底路径做回归。"
          "summary 是给人看的散文，其措辞不构成接口承诺。")
@@ -76,10 +132,15 @@ _NOTE = ("由 autotest.server.callback 的真实代码路径生成（scripts/gen
 
 def main() -> int:
     out = {k: {"summary": summarize(v), "metrics": build_metrics(v)} for k, v in CASES.items()}
+    for k, (baseline, current) in BASELINE_CASES.items():
+        rows = compare(baseline, current)
+        changes = changes_of(rows)
+        out[k] = {"summary": summarize(current, changes),
+                  "metrics": build_metrics(current, changes, rows)}
     out["_说明"] = _NOTE
     target = ROOT / "tests" / "fixtures" / "summary_samples.json"
     target.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"已写入 {target.relative_to(ROOT)}（{len(CASES)} 个样本）")
+    print(f"已写入 {target.relative_to(ROOT)}（{len(CASES) + len(BASELINE_CASES)} 个样本）")
     return 0
 
 

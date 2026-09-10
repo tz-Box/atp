@@ -172,3 +172,43 @@ def test_deep_merge_scalar_replaces_dict():
 def test_deep_merge_none_safe():
     assert deep_merge(None, {"a": 1}) == {"a": 1}
     assert deep_merge({"a": 1}, None) == {"a": 1}
+
+
+# ---- 场景文件 metrics 方向声明（M 2026-09-11：方向声明落在指标定义处）----
+
+def _write_scenario(tmp_path: Path, extra: dict) -> str:
+    p = tmp_path / "scene.yaml"
+    p.write_text(yaml.safe_dump({
+        "body": "invp_sim",
+        "dataset": {"type": "ctrl.invp.sim", "config": {}},
+        **extra,
+    }), encoding="utf-8")
+    return str(p)
+
+
+def test_scenario_metrics_directions_parsed(tmp_path):
+    from autotest.scenario import load_scenario
+    sc = load_scenario(_write_scenario(tmp_path, {
+        "metrics": {"survived": {"direction": "higher"},
+                    "settle_error": {"direction": "lower"}}}))
+    assert sc.metric_directions == {"survived": "higher", "settle_error": "lower"}
+
+
+def test_scenario_metrics_absent_means_no_directions(tmp_path):
+    from autotest.scenario import load_scenario
+    assert load_scenario(_write_scenario(tmp_path, {})).metric_directions == {}
+
+
+@pytest.mark.parametrize("metrics", [
+    {"survived": {"direction": "biggerer"}},   # 非法方向值
+    {"survived": {"direction": None}},         # 缺方向值
+    {"survived": "higher"},                    # 扁平串（需嵌套 dict，为批 2 扩展留位）
+    {"survived": {"direction": "higher", "typo_key": 1}},  # 未知键（拼错要被看见）
+    "higher",                                  # metrics 整体不是 dict
+])
+def test_scenario_metrics_invalid_declaration_fails_loudly(tmp_path, metrics):
+    """方向声明写错必须报错，不得静默当成「未声明」——否则该指标悄悄退回
+    undetermined，拼错的声明永远不会被发现（默认值倒向不安全侧的同族缺陷）。"""
+    from autotest.scenario import load_scenario
+    with pytest.raises(ValueError):
+        load_scenario(_write_scenario(tmp_path, {"metrics": metrics}))

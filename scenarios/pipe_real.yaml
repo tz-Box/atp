@@ -13,4 +13,7 @@ dataset:
     max_frames: 100                      # 冒烟测试：足够让 fastlio 出中轴线
 checker: pipe.slam.pipe
 checker_config: { center_tolerance: 0.3, direction_tolerance_deg: 5.0 }
+metrics:                        # 指标方向声明：回归对比据此判好/坏，缺声明不判（不猜）
+  center_error: { direction: lower }
+  direction_error: { direction: lower }
 # INIT 下发的 sensor_config 由 body 资产生成（body/pbox_v1.yaml），场景不重复声明

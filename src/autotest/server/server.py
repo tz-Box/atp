@@ -397,7 +397,9 @@ class AutotestService:
                 # M-F2：全场景清单（id/body/dataset_type），多场景排障与 Hub 展示用
                 "scenarios": [
                     {"id": eid, "body": sc.body, "dataset_type": sc.dataset_type,
-                     "expect": job.scenario_expects.get(eid, "pass")}   # A11
+                     "expect": job.scenario_expects.get(eid, "pass"),   # A11
+                     **({"metric_directions": sc.metric_directions}    # 方向声明留痕（排障/核对）
+                        if sc.metric_directions else {})}
                     for eid, sc in (job.scenario_entries or [("default", job.scenario)])
                 ],
                 "clock_rate": job.clock_rate,
@@ -478,6 +480,10 @@ class AutotestService:
                 def _on_testcase(testcase_id: str, result: Any) -> None:
                     entry = result_to_dict(result)
                     entry["testcase_id"] = f"{prefix}{entry['testcase_id']}"  # M-F2 多场景前缀
+                    if scenario.metric_directions:
+                        # 指标方向声明随行携带：回归对比（compare）只信当前报文里的声明，
+                        # 缺声明的指标不判好坏（M 2026-09-11 拍板，缺省不得猜）
+                        entry["directions"] = scenario.metric_directions
                     with job.lock:
                         job.results.append(entry)
                     passed = result.score.passed if result.score else None

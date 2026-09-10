@@ -19,6 +19,12 @@
 >    切换为 **Hub 直连 ATP HTTP 面**;ATP 评测完成**主动回调** Hub;GHA workflow 降级为算法仓自测备选。
 > ⑨ **§13 批次表更新**:批次 D 收口;批次 E 改向为"v1.5 ATP HTTP 面补全"(原 suite/enc=pb 顺延为 F)。
 >
+> **v1.2 增补(2026-09-11,M 按缺陷批准,vs_baseline 方向修正)**:
+> ⑩ **§9 场景配置增可选 `metrics` 方向声明**;**§10 回归分类语义修订**——好/坏只依声明判定、
+>    缺省不猜,`same` 拆出 `mixed`/`undetermined`/`no_comparable` 三态,回调载荷增
+>    `vs_baseline_detail`(数值+delta 永远给,红绿只在有声明时给)。出线报文分类语义属跨系统
+>    改动,已按变更纪律走 M 批准(收件箱 msg_20260911_655d),Hub 侧展示同步适配。
+>
 > 定位、两种评测模式、时钟/RESET 语义、tzcomm 传输**沿用 v1.0/v1.1**,本文档为完整替代版。
 
 ---
@@ -264,11 +270,19 @@ dataset:
   config: {root: ..., topic_map: {...}, gt_dir: ..., max_frames: 5000}
 checker: pipe.slam.ape        # 可省略(=数据流验证)
 checker_config: {...}         # 阈值覆盖
+metrics:                      # 可选(2026-09-11 增补):指标方向声明,回归对比据此判好/坏
+  ate_rmse: {direction: lower}    # lower=越小越好 | higher=越大越好;非法值报错不静默
+  rpe_rmse: {direction: lower}    # 缺声明的指标只报数值与 delta,不判方向(缺省不得猜)
 sensor_config: {lidar: {front: /points_raw}}   # 可选,覆盖 body 派生值,经 INIT 下发
 hyperparams: {...}            # 算法超参,经 INIT 下发
 ```
 
 (v1.2 回写:v1.1 示例首行 `module: pipe.slam` 已随 module 去常量化移除,场景实现字段以 `scenario.py` 为准。)
+
+**`metrics` 方向声明(2026-09-11 增补,M 按缺陷批准)**:此前回归对比方向写死「越小越好」,
+库中 7 个在用指标 3 个(survived/survival_time/upright_ratio)是越大越好,其劣化被成体系
+反报。方向声明与阈值同住被测仓的场景定义处(测试语义不出仓);嵌套 dict 形状为批 2 趋势
+判据(regression_tolerance 等)在同处扩展留位。分类语义见 §10 回归条目。
 
 ---
 
@@ -276,9 +290,9 @@ hyperparams: {...}            # 算法超参,经 INIT 下发
 
 - `autotest/control` 提交:`{manifest, scenario?, checker?, checker_config?, clock_rate?}` → `{job_id}`;`autotest/job/status` 轮询 → `{status, results, error, run_state?, frames?}`。
 - **调试命令(批次 B 新增)**:control 服务接受 `pause / step(n) / resume`——RunControl 帧级闸门(pause 停喂帧时钟冻结、step 暂停中配额放行 n 帧、resume 清残余配额);仅数据帧过闸,终止帧直达。
-- CLI:`run / matrix / report / pause / step / resume`;`--json` 供 CI——**`run --json` 输出携带 `job_id`**(批次 D);**`report --json` 机读回归对比** `{has_baseline, changes{improved/regressed/worse/new/same}, rows}`(批次 D);失败也写 report.json。
+- CLI:`run / matrix / report / pause / step / resume`;`--json` 供 CI——**`run --json` 输出携带 `job_id`**(批次 D);**`report --json` 机读回归对比** `{has_baseline, changes{...}, rows}`(批次 D;changes 枚举见下条);失败也写 report.json。
 - matrix:`algorithms:` 条目列表(manifest + 可选覆盖),逐条提交聚合;同算法跨 testcase RESET 复用,多版本对比走多条目。
-- 留痕:`artifacts/{job_id}/{report.json, session.log}`;回归:基线按 testcase 对齐逐指标对比(指标越小越好,passed 翻转优先判 improved/regressed,指标恶化未翻转记 worse);**`report --save-baseline` 滚动 `artifacts/baseline.json`**(批次 D;CI 语义=先对比后滚动)。
+- 留痕:`artifacts/{job_id}/{report.json, session.log}`;回归:基线按 testcase 对齐逐指标对比,**好/坏只依 §9 `metrics` 方向声明判定,缺声明不猜**(2026-09-11 修订,M 按缺陷批准;此前方向写死「越小越好」)。分类八态:`new`(基线无此 testcase)/`improved`·`regressed`(passed 翻转,优先)/`improved`·`worse`(变化的指标全部有声明且同向)/`mixed`(声明的指标有好有坏)/`same`(**仅**逐指标数值确实没变)/`undetermined`(有指标变了但缺方向声明)/`no_comparable`(无可比指标)——「没变化」「缺声明」「无可比」是三件事,不共用一个值;消费方遇到未知枚举默认要人看。回调载荷另携 `vs_baseline_detail`(逐 testcase 逐指标 value/baseline/delta **永远给**,direction/judgement 仅有声明时给——数值与红绿两层各守边界);**`report --save-baseline` 滚动 `artifacts/baseline.json`**(批次 D;CI 语义=先对比后滚动)。
 - **HTTP 运维面(批次 D 新增,:2335,FastAPI)**,与 tzcomm 面共享 Jobs 池:
   `GET /health`、`POST /api/submit`(等价 control 提交)、`POST /api/command`(pause/step/resume)、`GET /api/jobs/{job_id}`。
   **v1.5:总契约 §4.8 的 ATP 对外端点在本面上扩展(见 §11)。**
