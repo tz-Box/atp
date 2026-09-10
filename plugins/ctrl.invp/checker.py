@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from autotest.eval.checker import IChecker, Score
+from autotest.eval.checker import IChecker, Score, judged
 from autotest.protocol.schema import decode_ground_truth, decode_observation
 
 
@@ -28,10 +28,14 @@ class InvpChecker(IChecker):
         dt = float(gt_data.get("dt", 0.02))
         theta_limit = float(gt_data.get("theta_limit", 0.2095))
         settle_threshold = float(cfg.get("settle_threshold", 0.02))
+        # 判据清单先于早退声明（A11 批 0）：survived / settle_error 是判据，
+        # 其余指标（survival_time 等）是观测事实，不设判据。
+        criteria = (("survived", "survived == 1（撑满 max_steps）"),
+                    ("settle_error", f"settle_error <= {settle_threshold}"))
 
         thetas = self._thetas(records)
         if max_steps <= 0 or not thetas:
-            return Score(metrics={}, passed=False)
+            return Score.not_run(criteria)
 
         executed = len(thetas) - 1  # 首帧为 reset 观测，不计入执行步数
         survived = executed >= max_steps
@@ -40,16 +44,20 @@ class InvpChecker(IChecker):
         max_abs_theta = max(abs(t) for t in thetas)
         upright = sum(1 for t in thetas if abs(t) <= theta_limit) / len(thetas)
 
-        passed = survived and settle_error <= settle_threshold
-        return Score(
+        settle_rounded = round(settle_error, 6)
+        return Score.from_judgements(
             metrics={
                 "survived": 1.0 if survived else 0.0,
                 "survival_time": round(executed * dt, 4),
                 "max_abs_theta": round(max_abs_theta, 6),
-                "settle_error": round(settle_error, 6),
+                "settle_error": settle_rounded,
                 "upright_ratio": round(upright, 4),
             },
-            passed=passed,
+            judgements=[
+                judged("survived", criteria[0][1], survived, 1.0 if survived else 0.0),
+                judged("settle_error", criteria[1][1],
+                       settle_error <= settle_threshold, settle_rounded),
+            ],
         )
 
     @staticmethod

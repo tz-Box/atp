@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from typing import Any, Optional
 
-from autotest.eval.checker import IChecker, Score
+from autotest.eval.checker import IChecker, Score, judged
 from autotest.protocol.schema import (
     StampedPose,
     decode_ground_truth,
@@ -28,25 +28,30 @@ class NavChecker(IChecker):
         obstacles = gt_data.get("obstacles", [])
         # records 为 observation 外层信封（{timestamp, module, data}）列表，
         # data 解码为 NavData，取 (timestamp, robot_pose) 重建轨迹。
-        trajectory = self._trajectory(records)
-        if goal is None or not trajectory:
-            return Score(metrics={}, passed=False)
-
         arrival_tolerance = float(cfg.get("arrival_tolerance", 0.2))
         safety_threshold = float(cfg.get("safety_margin", 0.3))
+        # 判据清单先于早退声明（A11 批 0）：path_success 是观测事实，不设判据。
+        criteria = (("arrived", f"arrived == 1（终点距 goal <= {arrival_tolerance}）"),
+                    ("safety_margin", f"safety_margin >= {safety_threshold}"))
+        trajectory = self._trajectory(records)
+        if goal is None or not trajectory:
+            return Score.not_run(criteria)
 
         last = trajectory[-1].pose
         arrived = math.hypot(last.x - goal[0], last.y - goal[1]) <= arrival_tolerance
         safety_margin = self._min_clearance(trajectory, obstacles)
 
-        passed = arrived and safety_margin >= safety_threshold
-        return Score(
+        return Score.from_judgements(
             metrics={
                 "arrived": 1.0 if arrived else 0.0,
                 "safety_margin": safety_margin,
                 "path_success": 1.0 if arrived else 0.0,
             },
-            passed=passed,
+            judgements=[
+                judged("arrived", criteria[0][1], arrived, 1.0 if arrived else 0.0),
+                judged("safety_margin", criteria[1][1],
+                       safety_margin >= safety_threshold, safety_margin),
+            ],
         )
 
     @staticmethod

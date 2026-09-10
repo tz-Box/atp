@@ -68,3 +68,19 @@ def test_no_obstacle_safety_infinite():
     score = NavChecker().evaluate(records, gt)
     assert math.isinf(score.metrics["safety_margin"])
     assert score.passed
+
+
+# ---- 判据层（A11 批 0）----
+
+def test_judgements_and_not_run_on_empty_trajectory():
+    records = _records([(0.0, 0.0), (2.5, 0.0), (5.0, 0.0)])
+    gt = _gt((5.0, 0.0), [(3.0, 1.5, 0.5)])
+    score = NavChecker().evaluate(records, gt, {"arrival_tolerance": 0.2, "safety_margin": 0.3})
+    assert [(j.metric, j.actual) for j in score.judgements] == [
+        ("arrived", "pass"), ("safety_margin", "pass")]
+    assert score.judgements[1].value == score.metrics["safety_margin"]
+    # 轨迹为空 =「没法评」：判据以声明清单在场（actual=none），恒不通过
+    empty = NavChecker().evaluate([], gt, None)
+    assert empty.passed is False
+    assert [(j.metric, j.actual) for j in empty.judgements] == [
+        ("arrived", "none"), ("safety_margin", "none")]

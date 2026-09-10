@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from autotest.eval.checker import IChecker, Score
+from autotest.eval.checker import IChecker, Score, judged
 from autotest.protocol.schema import (
     Pose,
     StampedPose,
@@ -37,18 +37,24 @@ class SlamChecker(IChecker):
         config: Optional[dict[str, Any]] = None,
     ) -> Score:
         cfg = config or {}
+        ate_threshold = float(cfg.get("ate_threshold", 0.2))
+        rpe_threshold = float(cfg.get("rpe_threshold", 0.1))
+        # 判据清单先于任何早退声明：没法评时判据也须在场（actual="none"），
+        # 「没法评」≠「判据没过」——前者查数据源，后者查算法（A11 批 0）。
+        criteria = (("ate_rmse", f"ate_rmse <= {ate_threshold}"),
+                    ("rpe_rmse", f"rpe_rmse <= {rpe_threshold}"))
         gt_data = decode_ground_truth(ground_truth)
         gt_trajectory = [StampedPose.from_dict(d) for d in gt_data.get("trajectory", [])]
         # records 为 result payload（{module, data}）列表，SLAM 的 result 数据是 StampedPose。
         stamped = _decode_results(records, "pipe.slam.StampedPose")
         if not stamped or not gt_trajectory:
-            return Score(metrics={}, passed=False)
+            return Score.not_run(criteria)
 
         est, ref = self._match_by_time(
             stamped, gt_trajectory, float(cfg.get("time_tolerance", 0.05))
         )
         if len(est) < 2:
-            return Score(metrics={}, passed=False)
+            return Score.not_run(criteria)
 
         est_pts = np.array([[p.x, p.y, p.z] for p in est], dtype=float)
         ref_pts = np.array([[p.x, p.y, p.z] for p in ref], dtype=float)
@@ -56,11 +62,13 @@ class SlamChecker(IChecker):
         ate = self._ate(est_pts, ref_pts)
         rpe = self._rpe(est_pts, ref_pts, int(cfg.get("rpe_delta", 1)))
 
-        ate_threshold = float(cfg.get("ate_threshold", 0.2))
-        rpe_threshold = float(cfg.get("rpe_threshold", 0.1))
-        passed = ate <= ate_threshold and rpe <= rpe_threshold
-
-        return Score(metrics={"ate_rmse": ate, "rpe_rmse": rpe}, passed=passed)
+        return Score.from_judgements(
+            metrics={"ate_rmse": ate, "rpe_rmse": rpe},
+            judgements=[
+                judged("ate_rmse", criteria[0][1], ate <= ate_threshold, ate),
+                judged("rpe_rmse", criteria[1][1], rpe <= rpe_threshold, rpe),
+            ],
+        )
 
     @staticmethod
     def _match_by_time(
@@ -132,6 +140,10 @@ class PipeChecker(IChecker):
 
     def evaluate(self, records: list[Any], ground_truth: dict, config: Optional[dict[str, Any]] = None) -> Score:
         cfg = config or {}
+        center_tol = float(cfg.get("center_tolerance", 0.3))
+        direction_tol_deg = float(cfg.get("direction_tolerance_deg", 5.0))
+        criteria = (("center_error", f"center_error <= {center_tol}"),
+                    ("direction_error", f"direction_error <= {direction_tol_deg} deg"))
         gt_data = decode_ground_truth(ground_truth)
         gt_segments = gt_data.get("pipe_segment", [])
         cylinders = [
@@ -139,10 +151,7 @@ class PipeChecker(IChecker):
             if isinstance(c, CylinderResult) and c.valid
         ]
         if not cylinders or not gt_segments:
-            return Score(metrics={}, passed=False)
-
-        center_tol = float(cfg.get("center_tolerance", 0.3))
-        direction_tol_deg = float(cfg.get("direction_tolerance_deg", 5.0))
+            return Score.not_run(criteria)
 
         center_errors = []
         direction_errors = []
@@ -155,12 +164,18 @@ class PipeChecker(IChecker):
             direction_errors.append(self._angle_deg(cyl.direction, (dx, dy, dz)))
 
         if not center_errors:
-            return Score(metrics={}, passed=False)
+            return Score.not_run(criteria)
 
         mean_center = sum(center_errors) / len(center_errors)
         mean_direction = sum(direction_errors) / len(direction_errors)
-        passed = mean_center <= center_tol and mean_direction <= direction_tol_deg
-        return Score(metrics={"center_error": mean_center, "direction_error": mean_direction}, passed=passed)
+        return Score.from_judgements(
+            metrics={"center_error": mean_center, "direction_error": mean_direction},
+            judgements=[
+                judged("center_error", criteria[0][1], mean_center <= center_tol, mean_center),
+                judged("direction_error", criteria[1][1],
+                       mean_direction <= direction_tol_deg, mean_direction),
+            ],
+        )
 
     @staticmethod
     def _nearest(ts: float, segments: list[tuple]):

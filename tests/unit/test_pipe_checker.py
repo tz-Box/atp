@@ -60,3 +60,18 @@ def test_no_gt_returns_empty():
     score = PipeChecker().evaluate(records, encode_ground_truth("pipe.slam.PipeSegment", {}))
     assert score.metrics == {}
     assert not score.passed
+
+
+# ---- 判据层（A11 批 0）----
+
+def test_judgements_present_on_pass_and_none_when_unassessable():
+    checker = PipeChecker()
+    gt = _gt([(0.0, 0, 0, 0, 1, 0, 0)])
+    score = checker.evaluate([_result(0.0, (0, 0, 0), (1, 0, 0))], gt)
+    assert [(j.metric, j.actual) for j in score.judgements] == [
+        ("center_error", "pass"), ("direction_error", "pass")]
+    # GT 缺失 =「没法评」：判据以声明清单在场（actual=none），不是「判据没过」
+    empty = checker.evaluate([_result(0.0, (0, 0, 0), (1, 0, 0))], _gt([]))
+    assert empty.passed is False
+    assert [(j.metric, j.actual) for j in empty.judgements] == [
+        ("center_error", "none"), ("direction_error", "none")]

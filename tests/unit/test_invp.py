@@ -102,3 +102,29 @@ def test_sim_from_config():
     world.reset("b")
     assert world.get_ground_truth()["data"]["max_steps"] == 100
     world.close()
+
+
+# ---- 判据层（A11 批 0）----
+
+def test_judgements_criteria_only_not_every_metric():
+    """判据只挂在判断上（survived/settle_error）；其余指标是观测事实，不设判据。"""
+    score = invp.InvpChecker().evaluate(_records([0.0] * 101), _gt(100), {"settle_threshold": 0.02})
+    assert [j.metric for j in score.judgements] == ["survived", "settle_error"]
+    assert all(j.actual == "pass" for j in score.judgements)
+    assert score.judgements[1].rule == "settle_error <= 0.02"
+    assert score.passed  # 派生自判据，与旧手写语义一致
+
+
+def test_judgement_fail_maps_to_derived_passed():
+    score = invp.InvpChecker().evaluate(_records([0.1] * 101), _gt(100), {"settle_threshold": 0.02})
+    assert [(j.metric, j.actual) for j in score.judgements] == [
+        ("survived", "pass"), ("settle_error", "fail")]
+    assert not score.passed
+
+
+def test_no_frames_is_not_run():
+    """数据没到（无 theta 帧）=「没法评」：判据 actual=none 在场，恒不通过。"""
+    score = invp.InvpChecker().evaluate([], _gt(100), None)
+    assert score.passed is False and score.metrics == {}
+    assert [(j.metric, j.actual, j.value) for j in score.judgements] == [
+        ("survived", "none", None), ("settle_error", "none", None)]

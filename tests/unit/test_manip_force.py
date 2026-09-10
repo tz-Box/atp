@@ -126,3 +126,17 @@ def test_sim_from_config():
     assert gt["data"]["max_steps"] == 100
     assert gt["data"]["f_limit"] == 20.0
     world.close()
+
+
+# ---- 判据层（A11 批 0）----
+
+def test_judgements_and_not_run():
+    score = mforce.ForceChecker().evaluate(_records([8.0] * 101, target=8.0), _gt(100, 8.0),
+                                           {"settle_threshold": 0.5})
+    assert [(j.metric, j.actual) for j in score.judgements] == [
+        ("survived", "pass"), ("settle_error", "pass")]
+    assert score.judgements[1].rule == "settle_error <= 0.5"
+    # f_target<=0 =「没法评」（GT 不完整）：判据 actual=none 在场，恒不通过
+    empty = mforce.ForceChecker().evaluate(_records([8.0] * 101), _gt(100, 0.0), None)
+    assert empty.passed is False and empty.metrics == {}
+    assert all(j.actual == "none" for j in empty.judgements)

@@ -72,3 +72,29 @@ def test_noisy_estimate_fails_threshold():
     score = checker.evaluate(est, _gt(_line(range(10))), {"ate_threshold": 0.1, "rpe_threshold": 0.1})
     assert score.metrics["ate_rmse"] > 0.1
     assert not score.passed
+
+
+# ---- 判据层（A11 批 0）----
+
+def test_judgements_enumerate_declared_criteria():
+    checker = SlamChecker()
+    score = checker.evaluate(_results(_line(range(10))), _gt(_line(range(10))),
+                             config={"ate_threshold": 0.15})
+    assert [j.metric for j in score.judgements] == ["ate_rmse", "rpe_rmse"]
+    assert score.judgements[0].rule == "ate_rmse <= 0.15"   # rule 含已解析阈值（插件产出）
+    assert all(j.actual == "pass" for j in score.judgements)
+    assert score.judgements[0].value == score.metrics["ate_rmse"]
+    assert score.passed  # 派生：判据非空且全 pass
+
+
+def test_no_data_is_not_run_not_a_failed_judgement():
+    """「没法评」≠「判据没过」：数据没到时判据以**声明清单**在场（actual=none），
+    恒不通过——零判据默认 met 的 all([])==True 洞在这一层就堵死。"""
+    score = SlamChecker().evaluate([], _gt(_line(range(10))))
+    assert score.passed is False and score.metrics == {}
+    assert [(j.metric, j.actual, j.value) for j in score.judgements] == [
+        ("ate_rmse", "none", None), ("rpe_rmse", "none", None)]
+    # 匹配后样本不足 2 个同样是「没法评」
+    score = SlamChecker().evaluate(_results(_line([0])), _gt(_line([0])))
+    assert score.passed is False
+    assert all(j.actual == "none" for j in score.judgements)
