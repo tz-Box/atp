@@ -212,3 +212,16 @@ def test_scenario_metrics_invalid_declaration_fails_loudly(tmp_path, metrics):
     from autotest.scenario import load_scenario
     with pytest.raises(ValueError):
         load_scenario(_write_scenario(tmp_path, {"metrics": metrics}))
+
+
+def test_scenario_metrics_expect_parsed_and_validated(tmp_path):
+    from autotest.scenario import load_scenario
+    sc = load_scenario(_write_scenario(tmp_path, {
+        "metrics": {"ate_rmse": {"direction": "lower", "expect": "fail"},
+                    "rpe_rmse": {"expect": "pass"}}}))
+    assert sc.metric_expects == {"ate_rmse": "fail", "rpe_rmse": "pass"}
+    assert sc.metric_directions == {"ate_rmse": "lower"}   # expect 可单独声明，direction 可缺
+    with pytest.raises(ValueError):
+        load_scenario(_write_scenario(tmp_path, {"metrics": {"a": {"expect": "maybe"}}}))
+    with pytest.raises(ValueError):
+        load_scenario(_write_scenario(tmp_path, {"metrics": {"a": {}}}))   # 空声明无意义

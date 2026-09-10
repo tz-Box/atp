@@ -21,7 +21,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from autotest.eval.checker import Judgement, Score  # noqa: E402
 from autotest.server.callback import build_metrics, changes_of, summarize  # noqa: E402
+from autotest.server.job import judgements_to_dicts  # noqa: E402
 from autotest.server.report import compare  # noqa: E402
 
 
@@ -125,6 +127,49 @@ BASELINE_CASES = {
     ),
 }
 
+# ---- A11 批 1 样本（testcases_detail）----
+# 判据经真实装配路径（Score / judgements_to_dicts）产出，与 server._on_testcase 同一函数；
+# 判据级 expected 来自被测仓 metrics:{名:{expect}} 声明，缺省 pass。
+
+def _tc_row(tc, score: Score, expects=None, n=20):
+    """模拟 server._on_testcase 的随行携带（同一 judgements_to_dicts）。"""
+    row = {"testcase_id": tc, "metrics": score.metrics or None,
+           "passed": score.passed if (score.judgements or score.metrics) else None,
+           "n_records": n}
+    if score.judgements:
+        row["judgements"] = judgements_to_dicts(score, expects or {})
+        row["criteria_declared"] = len(score.judgements)
+    return row
+
+
+def _slam_score(ate, rpe, ate_t=0.05, rpe_t=0.1):
+    from autotest.eval.checker import judged
+    return Score.from_judgements(
+        metrics={"ate_rmse": ate, "rpe_rmse": rpe},
+        judgements=[judged("ate_rmse", f"ate_rmse <= {ate_t}", ate <= ate_t, ate),
+                    judged("rpe_rmse", f"rpe_rmse <= {rpe_t}", rpe <= rpe_t, rpe)])
+
+
+TCD_CASES = {
+    # ★判据级 expect:fail 的体检用例:degraded 场景声明 ate_rmse 必须超阈值。
+    # 判据级 met=true(预期内失败)→ 用例 state=met;原始 passed=False 不改写;
+    # 场景级 expect 也为 fail(两级声明由被测仓自洽),整次评测 success。
+    "tcd_expect_fail_probe": _rep(
+        [_tc_row("smoke:tc0", _slam_score(0.012, 0.008)),
+         _tc_row("degraded:tc0", _slam_score(0.2087, 0.008),
+                 expects={"ate_rmse": "fail"})],
+        [{"id": "smoke", "expect": "pass"}, {"id": "degraded", "expect": "fail"}]),
+    # ★actual:none:数据没到,checker 走 Score.not_run——判据以声明清单在场、
+    # 全 none、无 value 键;用例 state=not_run(「没法评」≠「判据没过」,不标红)。
+    # 另配一条数据流验证用例(零判据,也归 not_run,criteria_declared=0)。
+    "tcd_not_run_and_dataflow": _rep(
+        [_tc_row("full:tc0", _slam_score(0.012, 0.008)),
+         _tc_row("full:tc1", Score.not_run((("ate_rmse", "ate_rmse <= 0.05"),
+                                            ("rpe_rmse", "rpe_rmse <= 0.1")))),
+         {"testcase_id": "probe:tc0", "passed": None, "metrics": None, "n_records": 42}],
+        [{"id": "full", "expect": "pass"}, {"id": "probe", "expect": "pass"}]),
+}
+
 _NOTE = ("由 autotest.server.callback 的真实代码路径生成（scripts/gen_summary_samples.py），非手编。"
          "★消费方应读 metrics 取事实；本文件的 summary 仅供文本兜底路径做回归。"
          "summary 是给人看的散文，其措辞不构成接口承诺。")
@@ -137,10 +182,13 @@ def main() -> int:
         changes = changes_of(rows)
         out[k] = {"summary": summarize(current, changes),
                   "metrics": build_metrics(current, changes, rows)}
+    for k, rep in TCD_CASES.items():
+        out[k] = {"summary": summarize(rep), "metrics": build_metrics(rep)}
     out["_说明"] = _NOTE
     target = ROOT / "tests" / "fixtures" / "summary_samples.json"
     target.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"已写入 {target.relative_to(ROOT)}（{len(CASES) + len(BASELINE_CASES)} 个样本）")
+    print(f"已写入 {target.relative_to(ROOT)}"
+          f"（{len(CASES) + len(BASELINE_CASES) + len(TCD_CASES)} 个样本）")
     return 0
 
 

@@ -24,6 +24,11 @@
 >    缺省不猜,`same` 拆出 `mixed`/`undetermined`/`no_comparable` 三态,回调载荷增
 >    `vs_baseline_detail`(数值+delta 永远给,红绿只在有声明时给)。出线报文分类语义属跨系统
 >    改动,已按变更纪律走 M 批准(收件箱 msg_20260911_655d),Hub 侧展示同步适配。
+> ⑪ **A11 批 0/批 1(同日)**:插件契约增判据层——`Score.judgements[]`,`passed` 派生为
+>    「判据非空且全 pass」,「没法评」= `Score.not_run`(声明清单在场,actual=none);
+>    §9 `metrics` 块增判据级 `expect`;回调载荷增可选 `metrics.testcases_detail`
+>    (**形状定义在总契约 A11 节**,本契约不复制;判据级五态/用例级 met|unmet|not_run/
+>    criteria_declared 自检)。conclusion 算法不变(纯下沉)。
 >
 > 定位、两种评测模式、时钟/RESET 语义、tzcomm 传输**沿用 v1.0/v1.1**,本文档为完整替代版。
 
@@ -270,9 +275,10 @@ dataset:
   config: {root: ..., topic_map: {...}, gt_dir: ..., max_frames: 5000}
 checker: pipe.slam.ape        # 可省略(=数据流验证)
 checker_config: {...}         # 阈值覆盖
-metrics:                      # 可选(2026-09-11 增补):指标方向声明,回归对比据此判好/坏
+metrics:                      # 可选(2026-09-11 增补):指标元信息声明(方向 + 判据级期望)
   ate_rmse: {direction: lower}    # lower=越小越好 | higher=越大越好;非法值报错不静默
-  rpe_rmse: {direction: lower}    # 缺声明的指标只报数值与 delta,不判方向(缺省不得猜)
+  rpe_rmse: {direction: lower, expect: fail}  # expect:判据级期望(A11 批 1),缺省 pass
+                                  # 缺声明的指标只报数值与 delta,不判方向(缺省不得猜)
 sensor_config: {lidar: {front: /points_raw}}   # 可选,覆盖 body 派生值,经 INIT 下发
 hyperparams: {...}            # 算法超参,经 INIT 下发
 ```

@@ -32,7 +32,36 @@
         "passed": 1,
         "failed": 2,
         "total": 3
-      }
+      },
+      "testcases_detail": [
+        {
+          "name": "tc0",
+          "scenario": "smoke",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        },
+        {
+          "name": "tc0",
+          "scenario": "degraded",
+          "actual": "fail",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        },
+        {
+          "name": "tc1",
+          "scenario": "degraded",
+          "actual": "fail",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        }
+      ]
     }
   },
   "multi_no_expect": {
@@ -68,7 +97,27 @@
         "passed": 2,
         "failed": 0,
         "total": 2
-      }
+      },
+      "testcases_detail": [
+        {
+          "name": "small_push",
+          "scenario": "small_push",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        },
+        {
+          "name": "medium_push",
+          "scenario": "full",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        }
+      ]
     }
   },
   "single_scenario": {
@@ -94,7 +143,18 @@
         "passed": 1,
         "failed": 0,
         "total": 1
-      }
+      },
+      "testcases_detail": [
+        {
+          "name": "tc0",
+          "scenario": "smoke",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        }
+      ]
     }
   },
   "dataflow_only": {
@@ -120,7 +180,18 @@
         "passed": 0,
         "failed": 0,
         "total": 1
-      }
+      },
+      "testcases_detail": [
+        {
+          "name": "tc0",
+          "scenario": "probe",
+          "actual": "none",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        }
+      ]
     }
   },
   "atp_error": {
@@ -161,7 +232,27 @@
         "passed": 0,
         "failed": 2,
         "total": 2
-      }
+      },
+      "testcases_detail": [
+        {
+          "name": "<runtime>",
+          "scenario": "bad",
+          "actual": "fail",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        },
+        {
+          "name": "<scenario>",
+          "scenario": "bad",
+          "actual": "fail",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        }
+      ]
     }
   },
   "scenario_declared_but_empty": {
@@ -197,7 +288,18 @@
         "passed": 1,
         "failed": 0,
         "total": 1
-      }
+      },
+      "testcases_detail": [
+        {
+          "name": "tc0",
+          "scenario": "smoke",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        }
+      ]
     }
   },
   "unexpected_pass": {
@@ -223,7 +325,18 @@
         "passed": 1,
         "failed": 0,
         "total": 1
-      }
+      },
+      "testcases_detail": [
+        {
+          "name": "tc0",
+          "scenario": "degraded",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        }
+      ]
     }
   },
   "vsb_true_regression_now_visible": {
@@ -299,6 +412,17 @@
               "judgement": "worse"
             }
           ]
+        }
+      ],
+      "testcases_detail": [
+        {
+          "name": "tc0",
+          "scenario": "full",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
         }
       ]
     }
@@ -435,6 +559,249 @@
               "direction": "lower"
             }
           ]
+        }
+      ],
+      "testcases_detail": [
+        {
+          "name": "tc0",
+          "scenario": "a",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        },
+        {
+          "name": "tc1",
+          "scenario": "a",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        },
+        {
+          "name": "tc2",
+          "scenario": "a",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        },
+        {
+          "name": "tc3",
+          "scenario": "a",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        },
+        {
+          "name": "tc4",
+          "scenario": "a",
+          "actual": "none",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        },
+        {
+          "name": "tc5",
+          "scenario": "a",
+          "actual": "pass",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
+        }
+      ]
+    }
+  },
+  "tcd_expect_fail_probe": {
+    "summary": "2/2 场景符合预期（testcase 1/2 passed）; smoke:tc0: passed (ate_rmse=0.0120, rpe_rmse=0.0080); degraded:tc0: failed (ate_rmse=0.2087, rpe_rmse=0.0080)",
+    "metrics": {
+      "scenarios": [
+        {
+          "name": "smoke",
+          "expected": "pass",
+          "actual": "pass",
+          "met": true,
+          "testcases": {
+            "passed": 1,
+            "failed": 0
+          }
+        },
+        {
+          "name": "degraded",
+          "expected": "fail",
+          "actual": "fail",
+          "met": true,
+          "testcases": {
+            "passed": 0,
+            "failed": 1
+          }
+        }
+      ],
+      "scenario_counts": {
+        "met": 2,
+        "unmet": 0
+      },
+      "testcases": {
+        "passed": 1,
+        "failed": 1,
+        "total": 2
+      },
+      "testcases_detail": [
+        {
+          "name": "tc0",
+          "scenario": "smoke",
+          "actual": "pass",
+          "state": "met",
+          "met": true,
+          "criteria_declared": 2,
+          "judgements": [
+            {
+              "metric": "ate_rmse",
+              "rule": "ate_rmse <= 0.05",
+              "expected": "pass",
+              "actual": "pass",
+              "met": true,
+              "value": 0.012
+            },
+            {
+              "metric": "rpe_rmse",
+              "rule": "rpe_rmse <= 0.1",
+              "expected": "pass",
+              "actual": "pass",
+              "met": true,
+              "value": 0.008
+            }
+          ]
+        },
+        {
+          "name": "tc0",
+          "scenario": "degraded",
+          "actual": "fail",
+          "state": "met",
+          "met": true,
+          "criteria_declared": 2,
+          "judgements": [
+            {
+              "metric": "ate_rmse",
+              "rule": "ate_rmse <= 0.05",
+              "expected": "fail",
+              "actual": "fail",
+              "met": true,
+              "value": 0.2087
+            },
+            {
+              "metric": "rpe_rmse",
+              "rule": "rpe_rmse <= 0.1",
+              "expected": "pass",
+              "actual": "pass",
+              "met": true,
+              "value": 0.008
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "tcd_not_run_and_dataflow": {
+    "summary": "1/2 场景符合预期（testcase 1/3 passed）; full:tc0: passed (ate_rmse=0.0120, rpe_rmse=0.0080); full:tc1: failed (无指标); probe:tc0: 数据流验证 records=42",
+    "metrics": {
+      "scenarios": [
+        {
+          "name": "full",
+          "expected": "pass",
+          "actual": "fail",
+          "met": false,
+          "testcases": {
+            "passed": 1,
+            "failed": 1
+          }
+        },
+        {
+          "name": "probe",
+          "expected": "pass",
+          "actual": "pass",
+          "met": true,
+          "testcases": {
+            "passed": 0,
+            "failed": 0
+          }
+        }
+      ],
+      "scenario_counts": {
+        "met": 1,
+        "unmet": 1
+      },
+      "testcases": {
+        "passed": 1,
+        "failed": 1,
+        "total": 3
+      },
+      "testcases_detail": [
+        {
+          "name": "tc0",
+          "scenario": "full",
+          "actual": "pass",
+          "state": "met",
+          "met": true,
+          "criteria_declared": 2,
+          "judgements": [
+            {
+              "metric": "ate_rmse",
+              "rule": "ate_rmse <= 0.05",
+              "expected": "pass",
+              "actual": "pass",
+              "met": true,
+              "value": 0.012
+            },
+            {
+              "metric": "rpe_rmse",
+              "rule": "rpe_rmse <= 0.1",
+              "expected": "pass",
+              "actual": "pass",
+              "met": true,
+              "value": 0.008
+            }
+          ]
+        },
+        {
+          "name": "tc1",
+          "scenario": "full",
+          "actual": "fail",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 2,
+          "judgements": [
+            {
+              "metric": "ate_rmse",
+              "rule": "ate_rmse <= 0.05",
+              "expected": "pass",
+              "actual": "none",
+              "met": false
+            },
+            {
+              "metric": "rpe_rmse",
+              "rule": "rpe_rmse <= 0.1",
+              "expected": "pass",
+              "actual": "none",
+              "met": false
+            }
+          ]
+        },
+        {
+          "name": "tc0",
+          "scenario": "probe",
+          "actual": "none",
+          "state": "not_run",
+          "met": false,
+          "criteria_declared": 0,
+          "judgements": []
         }
       ]
     }

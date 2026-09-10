@@ -94,18 +94,26 @@ PMS「失败必通知」推飞书、Hub 概览失败数、交付物冻结判据�
 | `dataset.config` | dict | — | 数据集插件配置 |
 | `checker` | str | — | 判定插件命名空间键；空 = 数据流验证（不判 pass/fail） |
 | `checker_config` | dict | — | 判定插件配置（**判定阈值在此**，如 `settle_time_max: 2.0`） |
-| `metrics` | dict | — | **指标方向声明**（2026-09-11 增补）：`{指标名: {direction: lower\|higher}}`，见 §4.1 |
+| `metrics` | dict | — | **指标元信息声明**（2026-09-11 增补）：`{指标名: {direction: lower\|higher, expect: pass\|fail}}`，两键均可选但至少一个，见 §4.1 |
 | `sensor_config` | dict | — | `{类型: {实例名: topic}}`，经 INIT 下发 |
 | `hyperparams` | dict | — | 场景级算法超参 |
 
-### 4.1 `metrics` —— 指标方向声明（回归对比的好/坏依据）
+### 4.1 `metrics` —— 指标元信息声明（方向 + 判据级期望）
 
 ```yaml
 metrics:
   survived: { direction: higher }      # 越大越好
   settle_error: { direction: lower }   # 越小越好
+  ate_rmse: { direction: lower, expect: fail }  # 判据级期望：本场景该判据必须失败（体检）
   # peak_force 有意不声明：观测事实，孰优取决于工况 → 回归报告只给数值与 delta，不上色
 ```
+
+**`expect`（判据级期望，A11 批 1，2026-09-11 增补）**：语义同 §3.1 场景级 `expect`
+下沉到单条判据——「我预期这条判据会失败」，体检该判据本身还在不在工作。缺省 `pass`。
+- 只影响回调载荷 `metrics.testcases_detail` 的 `met` 层（判据五态由 expected/actual 推导），
+  **原始 `passed` 不改写、评测结论（conclusion）的算法不变**（仍由场景级 met 决定）；
+- 声明了 `expect: fail` 的场景，其**清单项的场景级 `expect` 通常也应声明 `fail`**——
+  否则原始 failed 会把场景判不符合预期。两级声明由被测仓自洽，ATP 不代为推导。
 
 - 回归对比（`vs_baseline`）**只对声明了方向的指标给「变好/变差」判断**；
   缺声明的指标只报数值与 delta，落「未判定」（undetermined）——**缺省不猜**。

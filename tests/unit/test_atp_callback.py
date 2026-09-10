@@ -347,7 +347,8 @@ def test_a11_metrics_shape_and_raw_facts_preserved():
                         {"testcase_id": "degraded:tc0", "passed": False},
                         {"testcase_id": "degraded:tc1", "passed": False}])
     m = cb.build_metrics(rep, {"same": 3})
-    assert set(m) == {"scenarios", "scenario_counts", "testcases", "vs_baseline"}
+    assert set(m) == {"scenarios", "scenario_counts", "testcases", "vs_baseline",
+                      "testcases_detail"}   # A11 批 1：有 results 即带判据级明细
     assert set(m["scenarios"][0]) == {"name", "expected", "actual", "met", "testcases"}
     assert m["scenario_counts"] == {"met": 2, "unmet": 0}
     # ★原始事实不改写：degraded 的两条确实失败了，否则没人知道它跑没跑过
@@ -490,3 +491,80 @@ def test_build_metrics_carries_detail_and_counts():
     assert m["vs_baseline_detail"][0]["metrics"][0]["judgement"] == "better"
     # rows 不给（无基线）→ 载荷里没有 detail 字段，消费方行为与今天一致
     assert "vs_baseline_detail" not in cb.build_metrics(rep, None)
+
+
+# ---- A11 批 1：testcases_detail（判据级明细）----
+
+def _j(metric, rule, expected, actual, met, value=None):
+    d = {"metric": metric, "rule": rule, "expected": expected, "actual": actual, "met": met}
+    if value is not None:
+        d["value"] = value
+    return d
+
+
+def test_testcases_detail_states_and_prefix_mapping():
+    rep = _report_with(
+        {"smoke": "pass", "degraded": "fail"},
+        [# met：判据非空且全 met
+         {"testcase_id": "smoke:tc0", "passed": True, "metrics": {"ate_rmse": 0.01},
+          "judgements": [_j("ate_rmse", "ate_rmse <= 0.05", "pass", "pass", True, 0.01)],
+          "criteria_declared": 1},
+         # 判据级 expect=fail 的体检用例：预期内失败 → met；原始 passed=False 不改写
+         {"testcase_id": "degraded:tc0", "passed": False, "metrics": {"ate_rmse": 0.2},
+          "judgements": [_j("ate_rmse", "ate_rmse <= 0.05", "fail", "fail", True, 0.2)],
+          "criteria_declared": 1},
+         # unmet：有评出的判据不符合
+         {"testcase_id": "degraded:tc1", "passed": False, "metrics": {"ate_rmse": 0.3},
+          "judgements": [_j("ate_rmse", "ate_rmse <= 0.05", "pass", "fail", False, 0.3)],
+          "criteria_declared": 1}])
+    detail = cb.testcases_detail(rep)
+    by_id = {(e["scenario"], e["name"]): e for e in detail}
+    assert by_id[("smoke", "tc0")]["state"] == "met"
+    d0 = by_id[("degraded", "tc0")]
+    assert d0["state"] == "met" and d0["met"] is True and d0["actual"] == "fail"  # 原始事实照报
+    assert by_id[("degraded", "tc1")]["state"] == "unmet"
+
+
+def test_testcases_detail_not_run_is_not_unmet():
+    """「没法评」≠「判据没过」：全 none / 没评全 / 零判据都归 not_run，不归 unmet。"""
+    rep = _report_with({"full": "pass"}, [
+        # 声明了两条判据、全没算出来（checker 早退 Score.not_run 的报文形状）
+        {"testcase_id": "full:tc0", "passed": False, "metrics": None,
+         "judgements": [_j("ate_rmse", "ate_rmse <= 0.05", "pass", "none", False),
+                        _j("rpe_rmse", "rpe_rmse <= 0.1", "pass", "none", False)],
+         "criteria_declared": 2},
+        # 评了的都符合但没评全 → 不能算符合，也不是 unmet
+        {"testcase_id": "full:tc1", "passed": False, "metrics": {"ate_rmse": 0.01},
+         "judgements": [_j("ate_rmse", "ate_rmse <= 0.05", "pass", "pass", True, 0.01),
+                        _j("rpe_rmse", "rpe_rmse <= 0.1", "pass", "none", False)],
+         "criteria_declared": 2},
+        # 零判据（数据流验证）：met 恒 False——all([])==True 的洞不得在报文层重开
+        {"testcase_id": "full:tc2", "passed": None, "metrics": None}])
+    detail = cb.testcases_detail(rep)
+    assert [e["state"] for e in detail] == ["not_run", "not_run", "not_run"]
+    assert all(e["met"] is False for e in detail)
+    assert detail[2]["criteria_declared"] == 0 and detail[2]["actual"] == "none"
+
+
+def test_testcases_detail_single_scenario_uses_declared_name():
+    """单场景 testcase_id 无前缀：scenario 取声明清单里的唯一场景名（与场景级同一约定）。"""
+    rep = _report_with({"only": "pass"},
+                       [{"testcase_id": "tc0", "passed": True, "metrics": {},
+                         "judgements": [_j("m", "m <= 1", "pass", "pass", True, 0.5)],
+                         "criteria_declared": 1}])
+    (entry,) = cb.testcases_detail(rep)
+    assert (entry["scenario"], entry["name"]) == ("only", "tc0")
+
+
+def test_judgements_to_dicts_combines_facts_with_declared_expects():
+    """checker 只产出事实；expected 来自被测仓声明，在序列化处合成；none 恒不 met 且无 value 键。"""
+    from autotest.eval.checker import Judgement, Score
+    from autotest.server.job import judgements_to_dicts
+    score = Score.from_judgements({"a": 0.2}, [
+        Judgement("a", "a <= 0.05", "fail", 0.2),
+        Judgement("b", "b <= 1", "none")])
+    out = judgements_to_dicts(score, {"a": "fail"})
+    assert out[0] == {"metric": "a", "rule": "a <= 0.05", "expected": "fail",
+                      "actual": "fail", "met": True, "value": 0.2}
+    assert out[1] == {"metric": "b", "rule": "b <= 1", "expected": "pass",
+                      "actual": "none", "met": False}   # 无 value 键

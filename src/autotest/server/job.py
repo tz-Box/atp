@@ -48,3 +48,23 @@ def result_to_dict(result: Any) -> dict:
         "passed": result.score.passed if result.score else None,
         "n_records": len(result.records),
     }
+
+
+def judgements_to_dicts(score: Any, metric_expects: dict) -> list[dict]:
+    """判据序列化（A11 批 1）：checker 的事实 + 被测仓的期望 → 报文形状。
+
+    职责分界：checker 只产出事实（rule/actual/value，见 eval.checker.Judgement）；
+    「我预期这条判据会失败」是被测仓 scenario.yaml `metrics:{名:{expect}}` 的声明，
+    在此合成。met = actual == expected 且 actual != "none"——声明了却没算出来
+    （none）恒不 met，与场景级 actual="none" 同名同义。原始 passed 不受 expect 影响。
+    """
+    dicts = []
+    for j in score.judgements:
+        expected = metric_expects.get(j.metric, "pass")
+        entry = {"metric": j.metric, "rule": j.rule,
+                 "expected": expected, "actual": j.actual,
+                 "met": j.actual != "none" and j.actual == expected}
+        if j.value is not None:
+            entry["value"] = j.value
+        dicts.append(entry)
+    return dicts

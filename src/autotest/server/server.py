@@ -39,7 +39,7 @@ from .checkout import (
     CheckoutError, cleanup_stale, locate_manifest, prepare_checkout, remove_worktree,
 )
 from .evaluations import conclusion_of, EvaluationStore
-from .job import Job, result_to_dict
+from .job import Job, judgements_to_dicts, result_to_dict
 from .runtime import RuntimePrepareError, prepare_runtime
 
 _JOB_TTL_SECONDS = 3600.0  # job 结果在池中保留时长（本版不清理，预留）
@@ -484,6 +484,13 @@ class AutotestService:
                         # 指标方向声明随行携带：回归对比（compare）只信当前报文里的声明，
                         # 缺声明的指标不判好坏（M 2026-09-11 拍板，缺省不得猜）
                         entry["directions"] = scenario.metric_directions
+                    if result.score is not None and result.score.judgements:
+                        # A11 批 1：判据明细随行携带（声明清单枚举，含 actual=none）。
+                        # criteria_declared 在产出现场取数——供消费方核对 judgements
+                        # 没有在组装链路上被弄丢（解析完整性自检的生产侧）。
+                        entry["judgements"] = judgements_to_dicts(
+                            result.score, scenario.metric_expects)
+                        entry["criteria_declared"] = len(result.score.judgements)
                     with job.lock:
                         job.results.append(entry)
                     passed = result.score.passed if result.score else None

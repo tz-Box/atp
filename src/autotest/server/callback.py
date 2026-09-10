@@ -117,7 +117,54 @@ def build_metrics(report: dict, changes: Optional[dict] = None,
         metrics["vs_baseline"] = changes
     if rows is not None:
         metrics["vs_baseline_detail"] = baseline_detail(rows)
+    if results:
+        metrics["testcases_detail"] = testcases_detail(report)   # A11 批 1
     return metrics
+
+
+def testcases_detail(report: dict) -> list[dict]:
+    """A11 批 1：判据级明细（metrics.testcases_detail，加法式可选段）。
+
+    每 testcase 一条：{name, scenario, actual, state, met, criteria_declared, judgements[]}。
+    - judgements 以**声明的判据清单**枚举（批 0 已保证），每条
+      {metric, rule, expected, actual∈pass|fail|none, met, value?}——五态由
+      expected/actual 推导，与场景级同一纪律（fail/pass=预期外通过=判据坏了）；
+    - state 三态：met / unmet / **not_run**——零判据、全 none、或「评了的都符合但
+      没评全」都归 not_run：**「没法评」≠「判据没过」**，met 恒 False 但不标红；
+      `all([])==True` 在批 0 的派生处已堵死，这里是它在报文层的对应物；
+    - criteria_declared 取自产出现场（server 侧随行携带），消费方应核对
+      len(judgements)==criteria_declared——判据在组装链路被弄丢时报文自己会说；
+    - 原始事实不改写：actual 直接映射 results[].passed（pass/fail/none=未打分），
+      结论（conclusion）的算法不因本段存在而改变。
+    """
+    expects = _expects_of(report)
+    default_name = next(iter(expects), "default") if len(expects) == 1 else "default"
+    detail: list[dict] = []
+    for r in report.get("results", []):
+        tid = str(r.get("testcase_id", ""))
+        if ":" in tid:
+            scenario, name = tid.split(":", 1)
+        else:
+            scenario, name = default_name, tid
+        judgements = r.get("judgements") or []
+        evaluated = [j for j in judgements if j.get("actual") != "none"]
+        if not evaluated:
+            state = "not_run"          # 零判据（数据流验证/装配失败）或声明了却全没算出来
+        elif any(not j.get("met") for j in evaluated):
+            state = "unmet"
+        elif all(j.get("met") for j in judgements):
+            state = "met"
+        else:
+            state = "not_run"          # 评了的都符合，但有判据没算出来——没评全不算符合
+        passed = r.get("passed")
+        detail.append({
+            "name": name, "scenario": scenario,
+            "actual": "pass" if passed is True else "fail" if passed is False else "none",
+            "state": state, "met": state == "met",
+            "criteria_declared": r.get("criteria_declared", len(judgements)),
+            "judgements": judgements,
+        })
+    return detail
 
 
 def baseline_detail(rows: list) -> list[dict]:
