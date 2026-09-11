@@ -13,6 +13,8 @@ from typing import Optional, Union
 
 import yaml
 
+from .scenario import parse_metrics_block
+
 _SCENARIO_ID = re.compile(r"^[a-z0-9_]+$")
 _RUNTIME_TYPES = ("host", "venv", "docker")
 _EXPECT_VALUES = ("pass", "fail")
@@ -42,6 +44,12 @@ class ScenarioEntry:
     # 结论按「实际 vs 期望」判定：符合预期即 success。**期望值必须落在被测仓内**
     # （R2「测试定义权威在被测仓内」），不能挂在 Hub 规则里，否则场景名与期望值两处必然漂。
     expect: str = "pass"
+    # metrics 块的清单项覆盖（逐指标增补/覆盖场景文件声明，与其他覆盖键同语义）。
+    # 存在的理由：多个清单项复用同一场景文件（同数据集不同超参 = 不同场景）时，
+    # 判据级 expect 是场景变体属性——「degraded 的 ate_rmse 必须超阈值」不能写进
+    # full 与 degraded 共享的场景文件里，否则套到 full 头上（cicd_test_slam 实例）。
+    metric_directions: dict = field(default_factory=dict)
+    metric_expects: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -77,6 +85,9 @@ def _parse_scenarios(data: list, manifest_name: str) -> list[ScenarioEntry]:
         if expect not in _EXPECT_VALUES:
             raise ValueError(
                 f"scenarios[{i}].expect 非法（pass|fail，缺省 pass）: {expect!r}（{manifest_name}）")
+        # metrics 覆盖与场景文件同一校验（fail fast → manifest_invalid）
+        m_directions, m_expects = parse_metrics_block(
+            item.get("metrics"), f"scenarios[{i}]（{manifest_name}）")
         entries.append(ScenarioEntry(
             id=sid,
             scenario=item["scenario"],
@@ -86,6 +97,8 @@ def _parse_scenarios(data: list, manifest_name: str) -> list[ScenarioEntry]:
             dataset_config=item.get("dataset_config") or {},
             baseline=item.get("baseline", ""),
             expect=expect,
+            metric_directions=m_directions,
+            metric_expects=m_expects,
         ))
     return entries
 

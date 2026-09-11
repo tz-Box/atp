@@ -34,40 +34,41 @@ _METRIC_DIRECTIONS = ("lower", "higher")
 _METRIC_EXPECTS = ("pass", "fail")
 
 
-def _parse_metrics_block(data: dict, path: str) -> tuple[dict, dict]:
-    """解析场景 `metrics:` 块 → ({指标名: 方向}, {指标名: 判据期望})。
+def parse_metrics_block(metrics, where: str) -> tuple[dict, dict]:
+    """解析 `metrics:` 块 → ({指标名: 方向}, {指标名: 判据期望})。
 
-    形状为 {指标名: {direction: lower|higher, expect: pass|fail}}，两键都可选但至少一个
-    （嵌套 dict 而非扁平串，为批 2 趋势判据在同一处扩展留位）。非法即报错，不静默降级：
-    声明写错却被当成"未声明"，会让该指标悄悄退回缺省行为，与「拼错的声明该被看见」相悖。
+    场景文件与**清单项覆盖**（docs/07 §3，manifest 侧）共用同一校验——两处声明、
+    一套规则。形状为 {指标名: {direction: lower|higher, expect: pass|fail}}，两键都可选
+    但至少一个（嵌套 dict 而非扁平串，为批 2 趋势判据在同一处扩展留位）。
+    非法即报错，不静默降级：声明写错却被当成"未声明"，会让该指标悄悄退回缺省行为，
+    与「拼错的声明该被看见」相悖。
     """
-    metrics = data.get("metrics")
     if metrics is None:
         return {}, {}
     if not isinstance(metrics, dict):
-        raise ValueError(f"场景 metrics 需为 dict（{{指标名: {{direction: ...}}}}）: {path}")
+        raise ValueError(f"metrics 需为 dict（{{指标名: {{direction: ...}}}}）: {where}")
     directions: dict[str, str] = {}
     expects: dict[str, str] = {}
     for name, spec in metrics.items():
         if not isinstance(spec, dict) or not spec:
             raise ValueError(
-                f"场景 metrics.{name} 需为非空 dict（如 {{direction: lower}}）: {path}")
+                f"metrics.{name} 需为非空 dict（如 {{direction: lower}}）: {where}")
         unknown = set(spec) - {"direction", "expect"}
         if unknown:
             raise ValueError(
-                f"场景 metrics.{name} 含未知键 {sorted(unknown)}"
-                f"（当前仅支持 direction / expect）: {path}")
+                f"metrics.{name} 含未知键 {sorted(unknown)}"
+                f"（当前仅支持 direction / expect）: {where}")
         if "direction" in spec:
             direction = spec["direction"]
             if direction not in _METRIC_DIRECTIONS:
                 raise ValueError(
-                    f"场景 metrics.{name}.direction 非法（lower|higher）: {direction!r}（{path}）")
+                    f"metrics.{name}.direction 非法（lower|higher）: {direction!r}（{where}）")
             directions[name] = direction
         if "expect" in spec:
             expect = spec["expect"]
             if expect not in _METRIC_EXPECTS:
                 raise ValueError(
-                    f"场景 metrics.{name}.expect 非法（pass|fail，缺省 pass）: {expect!r}（{path}）")
+                    f"metrics.{name}.expect 非法（pass|fail，缺省 pass）: {expect!r}（{where}）")
             expects[name] = expect
     return directions, expects
 
@@ -83,7 +84,7 @@ def load_scenario(path: str) -> Scenario:
     dataset = data["dataset"]
     if not isinstance(dataset, dict) or "type" not in dataset:
         raise ValueError(f"场景 dataset 缺 type: {path}")
-    directions, expects = _parse_metrics_block(data, path)
+    directions, expects = parse_metrics_block(data.get("metrics"), path)
     return Scenario(
         body=data["body"],
         dataset_type=dataset["type"],

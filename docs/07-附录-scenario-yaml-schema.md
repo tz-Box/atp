@@ -50,6 +50,7 @@ scenarios:
     hyperparams: {kp: 12.0}   # 可选;深合并覆盖 manifest.hyperparams 与场景文件 hyperparams
     checker_config: {}        # 可选;深合并覆盖场景文件 checker_config(判定阈值即经此表达)
     dataset_config: {}        # 可选;深合并覆盖场景文件 dataset.config
+    metrics: {}               # 可选;逐指标增补/覆盖场景文件 metrics 块,典型用途见 §4.1 末
     baseline: baselines/small_push.json   # 可选;仓内参考基线(相对仓根),见 §6
     expect: pass              # 可选;pass(缺省)|fail —— 本场景的**期望结果**,见 §3.1
 ```
@@ -114,6 +115,25 @@ metrics:
   **原始 `passed` 不改写、评测结论（conclusion）的算法不变**（仍由场景级 met 决定）；
 - 声明了 `expect: fail` 的场景，其**清单项的场景级 `expect` 通常也应声明 `fail`**——
   否则原始 failed 会把场景判不符合预期。两级声明由被测仓自洽，ATP 不代为推导。
+- **多个清单项复用同一场景文件时**（同数据集不同超参 = 不同场景，§3 约束末条），
+  判据级 `expect` 是**场景变体属性**，写进共享的场景文件会同时套到所有复用方头上
+  （`cicd_test_slam` 的 full/degraded 共用 `full.yaml` 即实例）。此时把它写在
+  **清单项的 `metrics:` 覆盖键**上（逐指标合并，只挂在需要的那一项）：
+
+  ```yaml
+  scenarios:
+    - id: full
+      scenario: scenarios/full.yaml            # 文件里声明 direction（指标内在属性）
+    - id: degraded
+      scenario: scenarios/full.yaml            # 复用同一文件
+      hyperparams: {noise_std: 0.5}
+      expect: fail                             # 场景级期望
+      metrics:
+        ate_rmse: {expect: fail}               # 判据级期望只挂在 degraded 上
+  ```
+
+  `direction` 建议仍只写在场景文件（指标的内在属性，不随清单项变化）；
+  覆盖键只做增补/覆盖，不支持删除声明。
 
 - 回归对比（`vs_baseline`）**只对声明了方向的指标给「变好/变差」判断**；
   缺声明的指标只报数值与 delta，落「未判定」（undetermined）——**缺省不猜**。
@@ -124,7 +144,6 @@ metrics:
 - **声明写错会报错**（direction 非 `lower|higher`、多余键、扁平写法），不静默降级——
   拼错的声明若被当成「未声明」，该指标会悄悄退回未判定态，没人发现。
 - 嵌套 dict 形状为趋势判据（`regression_tolerance` 等，批 2）在同处扩展预留。
-- 方向是指标的内在属性，不随清单项变化，故只在场景文件声明，清单项无覆盖键。
 
 ## 5. runtime 运行环境声明（R3，ATP 主责）
 

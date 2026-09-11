@@ -101,6 +101,10 @@ class AutotestService:
                     sc.hyperparams = deep_merge(sc.hyperparams, entry.hyperparams)
                     sc.checker_config = deep_merge(sc.checker_config, entry.checker_config)
                     sc.dataset_config = deep_merge(sc.dataset_config, entry.dataset_config)
+                    # metrics 覆盖逐指标合并：清单项复用同一场景文件时，判据级 expect
+                    # 只挂在需要的那一项上（场景变体属性，不能住共享的场景文件）
+                    sc.metric_directions = {**sc.metric_directions, **entry.metric_directions}
+                    sc.metric_expects = {**sc.metric_expects, **entry.metric_expects}
                     if request.get("checker"):
                         sc.checker = request["checker"]
                     if request.get("checker_config"):

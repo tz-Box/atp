@@ -225,3 +225,24 @@ def test_scenario_metrics_expect_parsed_and_validated(tmp_path):
         load_scenario(_write_scenario(tmp_path, {"metrics": {"a": {"expect": "maybe"}}}))
     with pytest.raises(ValueError):
         load_scenario(_write_scenario(tmp_path, {"metrics": {"a": {}}}))   # 空声明无意义
+
+
+def test_entry_metrics_override_parsed_and_validated(tmp_path):
+    """清单项 metrics 覆盖：判据级 expect 是场景变体属性——多个清单项复用同一
+    场景文件时（cicd_test_slam 的 full/degraded 共用 full.yaml），expect:fail
+    只能挂在清单项上，写进共享文件会套到所有复用方头上。"""
+    m = load_algorithm_manifest(_write_manifest(tmp_path, {
+        "launch": "echo ok",
+        "scenarios": [
+            {"id": "full", "scenario": "scenarios/full.yaml"},
+            {"id": "degraded", "scenario": "scenarios/full.yaml", "expect": "fail",
+             "metrics": {"ate_rmse": {"expect": "fail"}}},
+        ]}))
+    assert m.scenarios[0].metric_expects == {}
+    assert m.scenarios[1].metric_expects == {"ate_rmse": "fail"}
+    # 与场景文件同一校验：非法声明 → ValueError（上层映射 manifest_invalid）
+    with pytest.raises(ValueError):
+        load_algorithm_manifest(_write_manifest(tmp_path, {
+            "launch": "echo ok",
+            "scenarios": [{"id": "a", "scenario": "s.yaml",
+                           "metrics": {"x": {"expect": "maybe"}}}]}))
