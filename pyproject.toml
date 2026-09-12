@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 # 发行包名 tz_atp（tz=团队缩写，atp=autotest platform，与 GitHub 仓库对应）；
 # import 名保持 autotest（仓库内代码/插件/算法 SUT 均按此导入）。
 name = "tz_atp"
-version = "0.1.0"
+version = "0.2.0"
 description = "统一自动化测试服务框架（基于 tzcomm）"
 requires-python = ">=3.9"
 # 注意：tzcomm 为环境内已安装的本地组件（editable），不在此声明依赖。

@@ -286,8 +286,11 @@ hyperparams: {...}            # 算法超参,经 INIT 下发
 (v1.2 回写:v1.1 示例首行 `module: pipe.slam` 已随 module 去常量化移除,场景实现字段以 `scenario.py` 为准。)
 
 **`metrics` 方向声明(2026-09-11 增补,M 按缺陷批准)**:此前回归对比方向写死「越小越好」,
-库中 7 个在用指标 3 个(survived/survival_time/upright_ratio)是越大越好,其劣化被成体系
-反报。方向声明与阈值同住被测仓的场景定义处(测试语义不出仓);嵌套 dict 形状为批 2 趋势
+库中 7 个在用指标 3 个(survived/survival_time/upright_ratio)是越大越好。
+(更正 2026-09-12:缺陷定性为**潜伏**而非已发生——这三个指标在通过的评测里恒为常数、
+失败多经 passed 翻转分支,16 次真实评测全绿从未触发;但连续两次失败的对比、以及
+manip.force/nav2d 的 tracking_ratio/safety_margin 一旦启用即触发,修复必要性不变。)
+方向声明与阈值同住被测仓的场景定义处(测试语义不出仓);嵌套 dict 形状为批 2 趋势
 判据(regression_tolerance 等)在同处扩展留位。分类语义见 §10 回归条目。
 
 ---

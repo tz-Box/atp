@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+import functools
 import hmac
 import importlib.metadata
 import os
 import shutil
+import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -26,6 +29,8 @@ from pydantic import BaseModel, Field
 import tzcomm
 
 from .. import CONTRACT_VERSION
+
+_STARTED_AT = time.strftime("%Y-%m-%dT%H:%M:%S%z")
 from ..commcheck import check_daemon
 from ..registry import available_bodies, available_plugins
 from . import auth
@@ -136,7 +141,7 @@ def create_app(service: AutotestService) -> FastAPI:
             selfcheck.stop()
 
     # Swagger 挪 /api/docs：/docs 让给算法工程师文档门户（ docs.html ）
-    app = FastAPI(title="autotest-service", version="0.1.0",
+    app = FastAPI(title="autotest-service", version=_atp_version(),
                   docs_url="/api/docs", redoc_url=None, lifespan=_lifespan)
     app.include_router(auth.router)  # M-E11 飞书登录（人通道，与 Bearer 机器通道分层并存）
 
@@ -241,6 +246,8 @@ def create_app(service: AutotestService) -> FastAPI:
         return {
             "ok": healthy,
             "version": _atp_version(),
+            # 在跑的究竟是哪份代码（版本号答不了，见 _atp_build）
+            "build": _atp_build(),
             "contract": CONTRACT_VERSION,  # v1.7-R12：已实现到哪版总契约（非包版本）
             # 保持 bool：Hub 侧按真值判定路由跳过，改成对象会恒真（对象永远 truthy），
             # 反而把"不健康"变成静默通过——正是本次要修的那类故障
@@ -340,6 +347,42 @@ def _atp_version() -> str:
         return importlib.metadata.version("tz_atp")
     except importlib.metadata.PackageNotFoundError:
         return "dev"
+
+
+@functools.lru_cache(maxsize=1)
+def _atp_build() -> dict:
+    """在跑的是哪份代码：git commit + 工作区是否有未提交改动。
+
+    **为什么版本号不够**：版本号是发布时人工提的常量，两次发布之间的所有 commit
+    共用同一个版本号；服务若跑着旧进程，health 照报同一个版本号、`ok: true`，
+    **「我不知道线上是哪一版」与「线上是对的」由同一组输出表达**。
+    2026-09-12 真实踩过：常驻服务跑了五天前的代码，health 全绿，查了数轮才发现。
+
+    进程生命期内缓存：commit 不会在进程内变；`dirty` 是**启动时**的快照，
+    因此它回答的是「这个进程是从什么状态启起来的」，不是「现在工作区什么样」——
+    后者不是 health 该答的问题，混在一起会让人以为改完文件不重启也会被看见。
+    """
+    root = Path(__file__).resolve().parents[3]
+    def _git(*args: str) -> Optional[str]:
+        try:
+            out = subprocess.run(("git", "-C", str(root)) + args,
+                                 capture_output=True, timeout=2, text=True)
+            return out.stdout.strip() if out.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            return None          # 非 git 部署（容器/wheel）——正常情形，不是故障
+
+    commit = _git("rev-parse", "--short", "HEAD")
+    if commit is None:
+        return {"commit": None, "branch": None, "dirty": None,
+                "note": "非 git 部署或 git 不可用"}
+    status = _git("status", "--porcelain")
+    return {
+        "commit": commit,
+        "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
+        # None = 查不出来，与 False（确实干净）分开——不把「不知道」报成「没问题」
+        "dirty": None if status is None else bool(status),
+        "started_at": _STARTED_AT,
+    }
 
 
 def main() -> None:
